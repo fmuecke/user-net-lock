@@ -1956,7 +1956,7 @@ void print_usage()
                << L"  --user <account>  Local Windows account to which the policy applies.\n"
                << L"  --port <port>     Loopback TCP port, from 1 through 65535.\n"
                << L"\napply and remove require an elevated Administrator session. "
-                  L"A managed standard account may list or verify only its own policy.\n"
+                  L"\nA managed standard account may list or verify only its own policy.\n"
                << std::endl;
 }
 

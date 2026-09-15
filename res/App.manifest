@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+SPDX-FileCopyrightText: 2026 Florian Mücke
+SPDX-License-Identifier: GPL-3.0-only
+Project: Project: https://github.com/fmuecke/user-net-lock.git
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+</assembly>

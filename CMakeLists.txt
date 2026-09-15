@@ -4,11 +4,46 @@
 
 cmake_minimum_required(VERSION 3.25)
 
-project(user-net-lock VERSION 0.8.0 LANGUAGES CXX)
+project(
+	user-net-lock 
+	VERSION 0.8.0 
+	LANGUAGES CXX RC
+)
+
+set(APP_VERSION "${PROJECT_VERSION}")
+set(APP_VERSION_TWEAK 0)
 
 if(NOT WIN32)
     message(FATAL_ERROR "user-net-lock supports Windows only")
 endif()
+
+function(configure_app_version_resource output description internal_name original_filename)
+    set(APP_FILE_DESCRIPTION "${description}")
+    set(APP_INTERNAL_NAME "${internal_name}")
+    set(APP_ORIGINAL_FILENAME "${original_filename}")
+    configure_file(
+        res/AppVersion.rc.in
+        "${CMAKE_CURRENT_BINARY_DIR}/${output}"
+        @ONLY
+    )
+endfunction()
+
+configure_app_version_resource(
+    AppVersion.rc
+    "Bind user traffic to loopback ports"
+    "user-net-lock"
+    "user-net-lock.exe"
+)
+configure_file(
+    res/AppVersion.h.in
+    "${CMAKE_CURRENT_BINARY_DIR}/AppVersion.h"
+    @ONLY
+)
+#configure_file(
+#    res/App.manifest
+#    "${CMAKE_CURRENT_BINARY_DIR}/App.manifest"
+#    COPYONLY
+#)
 
 add_library(user-net-lock_lib STATIC
     src/user_net_lock.cpp
@@ -32,7 +67,11 @@ target_link_libraries(user-net-lock_lib PUBLIC
     ws2_32
 )
 
-add_executable(user-net-lock src/main.cpp)
+add_executable(user-net-lock 
+	src/main.cpp
+	"${CMAKE_CURRENT_BINARY_DIR}/AppVersion.rc"
+)
+	
 target_link_libraries(user-net-lock PRIVATE user-net-lock_lib)
 
 include(CTest)
