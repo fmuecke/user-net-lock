@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Project: https://github.com/fmuecke/user-net-lock.git
 
-# Uses the Windows Sandbox cli to run elevated tests without messing up the dev system.
+# Uses the shared Windows Sandbox helper to run elevated tests without messing up the dev system.
 #
 # Flow:
 # 1. Refuse to use an existing sandbox, then start a fresh unconfigured one.
@@ -20,41 +20,6 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-
-function Invoke-WsbRaw {
-    param(
-        [Parameter(Mandatory)][string[]]$Arguments,
-        [switch]$CaptureFailure
-    )
-
-    $output = & wsb.exe --raw @Arguments 2>&1 | Out-String
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -ne 0 -and -not $CaptureFailure) {
-        throw "wsb $($Arguments -join ' ') failed with exit code $exitCode.`n$output"
-    }
-    return [PSCustomObject]@{
-        Output   = $output
-        ExitCode = $exitCode
-    }
-}
-
-function Find-WsbId {
-    param([Parameter(Mandatory)]$Value)
-
-    if ($Value -is [string]) {
-        return $null
-    }
-    foreach ($property in $Value.PSObject.Properties) {
-        if ($property.Name -ieq 'id' -and $property.Value -is [string] -and $property.Value) {
-            return $property.Value
-        }
-        $nested = Find-WsbId -Value $property.Value
-        if ($nested) {
-            return $nested
-        }
-    }
-    return $null
-}
 
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $buildScript = Join-Path $repositoryRoot 'build.ps1'
@@ -76,83 +41,53 @@ if (-not (Test-Path -LiteralPath $trafficIntegrationExecutable -PathType Leaf)) 
     throw "The traffic integration executable was not built: $trafficIntegrationExecutable"
 }
 
-Write-Host ""
-Write-Host "Starting Windows Sandbox for elevated tests..."
-
-$running = (Invoke-WsbRaw -Arguments @('list')).Output | ConvertFrom-Json
-if (@($running.WindowsSandboxEnvironments).Count -ne 0) {
-    throw 'A Windows Sandbox is already running; refuse to attach the WFP integration test.'
-}
-
 $runRoot = Join-Path $repositoryRoot 'out\windows-sandbox-integration'
-$runDirectory = Join-Path $runRoot ([Guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
-Copy-Item -LiteralPath $integrationExecutable -Destination $runDirectory
-Copy-Item -LiteralPath $trafficIntegrationExecutable -Destination $runDirectory
-$guestDirectory = 'C:\WfpIntegration'
-$testAccounts = @('WfpSandboxTestA', 'WfpSandboxTestB')
-$resultPath = Join-Path $runDirectory 'result.txt'
-$trafficResultPath = Join-Path $runDirectory 'traffic-result.txt'
-
-$sandboxId = $null
-# Measure the complete isolated run, including guest startup and teardown, but
-# not the host build performed above.
-$sandboxTiming = [PSCustomObject]@{
-    Stopwatch   = [Diagnostics.Stopwatch]::StartNew()
-    LastSeconds = 0.0
-}
-
-function Write-SandboxTiming {
-    param([Parameter(Mandatory)][string]$Phase)
-
-    $totalSeconds = $sandboxTiming.Stopwatch.Elapsed.TotalSeconds
-    $phaseSeconds = $totalSeconds - $sandboxTiming.LastSeconds
-    $sandboxTiming.LastSeconds = $totalSeconds
-    Write-Host ([string]::Format(
-            [Globalization.CultureInfo]::InvariantCulture,
-            '{0}: {1:F2} secs (total {2:F2} secs)',
-            $Phase, $phaseSeconds, $totalSeconds))
-}
-
+# Update the immutable raw revision and SHA-256 together when publishing a new
+# WindowsSandboxTest module version.
+$windowsSandboxTestModuleUri = 'https://gist.githubusercontent.com/fmuecke/2a53528dba05cd208c2cfbef2c547e2a/raw/894855d0810861b90c4333dd4caba352d6b27d32/WindowsSandboxTest.psm1'
+$windowsSandboxTestModuleSha256 = 'B13C8BC805C4FD57F6AFCDA5DB65B2470A4F545BA33AA5CA43D43DD5FB508AB7'
+$windowsSandboxTestModulePath = Join-Path $runRoot 'WindowsSandboxTest-1.0.0.psm1'
+$windowsSandboxTestDownloadPath = "$windowsSandboxTestModulePath.download"
+New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
 try {
-    $started = (Invoke-WsbRaw -Arguments @('start')).Output | ConvertFrom-Json
-    $sandboxId = Find-WsbId -Value $started
-    if (-not $sandboxId) {
-        throw "wsb start did not return a sandbox id: $($started | ConvertTo-Json -Depth 8)"
+    Invoke-WebRequest -Uri $windowsSandboxTestModuleUri -OutFile $windowsSandboxTestDownloadPath
+    $downloadedHash = (Get-FileHash -LiteralPath $windowsSandboxTestDownloadPath -Algorithm SHA256).Hash
+    if ($downloadedHash -ne $windowsSandboxTestModuleSha256) {
+        throw "WindowsSandboxTest 1.0.0 hash mismatch. Expected $windowsSandboxTestModuleSha256, got $downloadedHash."
     }
-    Write-SandboxTiming 'Sandbox start'
-
-    $deadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
-    $lastShareError = $null
-    do {
-        try {
-            Invoke-WsbRaw -Arguments @('share', '--id', $sandboxId, '-f', $runDirectory,
-                '-s', $guestDirectory, '-w') | Out-Null
-            $lastShareError = $null
-            break
-        }
-        catch {
-            $lastShareError = $_
-            Start-Sleep -Seconds 2
-        }
-    } while ((Get-Date) -lt $deadline)
-    if ($lastShareError) {
-        throw "Windows Sandbox did not accept the shared test directory.`n$lastShareError"
+    Move-Item -LiteralPath $windowsSandboxTestDownloadPath -Destination $windowsSandboxTestModulePath -Force
+}
+finally {
+    if (Test-Path -LiteralPath $windowsSandboxTestDownloadPath) {
+        Remove-Item -LiteralPath $windowsSandboxTestDownloadPath -Force
     }
-    Write-SandboxTiming 'Sandbox ready and shared folder mounted'
+}
+Import-Module $windowsSandboxTestModulePath -Force
 
+$testAccounts = @('WfpSandboxTestA', 'WfpSandboxTestB')
+Invoke-WindowsSandboxTest `
+    -RunRoot $runRoot `
+    -ArtifactPath @($integrationExecutable, $trafficIntegrationExecutable) `
+    -StartupTimeoutSeconds $StartupTimeoutSeconds `
+    -TestScript {
+    param($sandbox)
+
+    $resultPath = Join-Path $sandbox.HostDirectory 'result.txt'
+    $trafficResultPath = Join-Path $sandbox.HostDirectory 'traffic-result.txt'
     $provisionCommand = 'cmd.exe /d /c "(net user {0} "" /add && net user {1} "" /add)"' -f $testAccounts[0], $testAccounts[1]
-    $provision = Invoke-WsbRaw -Arguments @(
-        'exec', '--id', $sandboxId, '-d', $guestDirectory, '-r', 'system', '-c', $provisionCommand) -CaptureFailure
-    Write-SandboxTiming 'Guest test-account provisioning'
+    $provision = & $sandbox.InvokeCommand `
+        -Command $provisionCommand `
+        -Phase 'Guest test-account provisioning' `
+        -CaptureFailure
     if ($provision.ExitCode -ne 0) {
         throw "The sandbox test-account provisioning failed with exit code $($provision.ExitCode).`n$($provision.Output)"
     }
 
-    $testCommand = 'cmd.exe /d /c "user-net-lock-integration-tests.exe {0} {1} > {2}\result.txt 2>&1"' -f $testAccounts[0], $testAccounts[1], $guestDirectory
-    $execution = Invoke-WsbRaw -Arguments @(
-        'exec', '--id', $sandboxId, '-d', $guestDirectory, '-r', 'system', '-c', $testCommand) -CaptureFailure
-    Write-SandboxTiming 'Guest integration tests'
+    $testCommand = 'cmd.exe /d /c "user-net-lock-integration-tests.exe {0} {1} > {2}\result.txt 2>&1"' -f $testAccounts[0], $testAccounts[1], $sandbox.GuestMountPath
+    $execution = & $sandbox.InvokeCommand `
+        -Command $testCommand `
+        -Phase 'Guest integration tests' `
+        -CaptureFailure
 
     if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
         throw "The sandbox test did not create $resultPath.`n$($execution.Output)"
@@ -165,10 +100,11 @@ try {
         throw "The sandbox test did not report success.`n$result"
     }
 
-    $trafficCommand = 'cmd.exe /d /c "user-net-lock-traffic-integration-tests.exe {0} {1} > {2}\traffic-result.txt 2>&1"' -f $testAccounts[0], $testAccounts[1], $guestDirectory
-    $trafficExecution = Invoke-WsbRaw -Arguments @(
-        'exec', '--id', $sandboxId, '-d', $guestDirectory, '-r', 'system', '-c', $trafficCommand) -CaptureFailure
-    Write-SandboxTiming 'Guest traffic-enforcement integration test'
+    $trafficCommand = 'cmd.exe /d /c "user-net-lock-traffic-integration-tests.exe {0} {1} > {2}\traffic-result.txt 2>&1"' -f $testAccounts[0], $testAccounts[1], $sandbox.GuestMountPath
+    $trafficExecution = & $sandbox.InvokeCommand `
+        -Command $trafficCommand `
+        -Phase 'Guest traffic-enforcement integration test' `
+        -CaptureFailure
 
     if (-not (Test-Path -LiteralPath $trafficResultPath -PathType Leaf)) {
         throw "The sandbox traffic test did not create $trafficResultPath.`n$($trafficExecution.Output)"
@@ -181,21 +117,5 @@ try {
         throw "The sandbox traffic test did not report success.`n$trafficResult"
     }
 
-    Write-Output $result
-    Write-Output $trafficResult
-}
-finally {
-    try {
-        if ($sandboxId) {
-            Invoke-WsbRaw -Arguments @('stop', '--id', $sandboxId) | Out-Null
-        }
-    }
-    finally {
-        $sandboxTiming.Stopwatch.Stop()
-        Write-SandboxTiming 'Sandbox teardown'
-        Write-Host ([string]::Format(
-                [Globalization.CultureInfo]::InvariantCulture,
-                'Windows Sandbox integration test duration: {0:F2} secs',
-                $sandboxTiming.Stopwatch.Elapsed.TotalSeconds))
-    }
+    return @($result, $trafficResult)
 }

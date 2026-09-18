@@ -87,3 +87,10 @@ list and verify its own installed policy without elevation, while the other
 standard account cannot inspect it. It also attempts to weaken the provider
 DACL through the target account's direct WFP API call and requires access to be
 denied.
+
+The runner downloads the reusable
+[`WindowsSandboxTest`](https://gist.github.com/fmuecke/2a53528dba05cd208c2cfbef2c547e2a)
+module from GitHub. It pins both the published raw revision and its SHA-256
+before importing it. The module stages artifacts in a caller-owned host
+directory, runs its callback as `SYSTEM` by default, and stops the fresh guest
+afterward.
