@@ -51,6 +51,15 @@ and proxy health. `agent-win-sandbox` orchestrates the proxy first and calls
 This remains a host-scoped, attribution-dependent control. Validate all
 brokered and virtualized networking paths in the actual deployment.
 
+One brokered path is known to be open: DNS lookups delegated to the DNS Client
+service (`Dnscache`). The service sends the query as `NT AUTHORITY\NETWORK
+SERVICE`, so the target SID's `FWPM_CONDITION_ALE_USER_ID` filters do not match
+and the managed account can still resolve arbitrary names and read the
+answers. The fixed filters block only DNS sent from the account's own sockets.
+A per-user block filter at `FWPM_LAYER_RPC_UM` on the resolver interface does
+not close the path. Restricting it is a host-wide deployment concern outside
+this tool's contract; see issue #1.
+
 `apply` and `remove` always require elevation. A non-elevated caller of
 `verify` or `list` must be the target account; administrators may inspect any
 account. This identity check narrows the CLI surface, while the WFP ACLs remain

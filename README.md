@@ -49,6 +49,25 @@ WFP attribution is host-scoped, not a VM or network boundary. Test WSL,
 containers, virtual machines, BITS, and other brokered paths in the deployment
 that relies on it.
 
+### Known limitation: DNS lookups are not blocked
+
+The policy does not stop the managed account from resolving hostnames
+([issue #1](https://github.com/fmuecke/user-net-lock/issues/1)). Windows
+resolver APIs such as `GetAddrInfoW` hand the lookup to the DNS Client service
+(`Dnscache`), which sends the query as `NT AUTHORITY\NETWORK SERVICE`. WFP
+attributes that traffic to the service, so the account's `ALE_USER_ID` filters
+never match it. Only DNS sent from the account's own sockets is blocked.
+
+The managed account can therefore send data out in queried names and receive
+data in the answers, through whatever resolvers the host is configured to use.
+This was reproduced on Windows 11 build 26100 with the policy applied and
+verified. A per-user RPC filter on the DNS Client service's resolver interface
+was tried and had no effect.
+
+`user-net-lock` has no per-user control for this path. A deployment that needs
+it closed has to restrict name resolution for the whole host, for example by
+limiting which resolvers the DNS Client service can reach.
+
 ## Build
 
 ```powershell
