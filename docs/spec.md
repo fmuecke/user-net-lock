@@ -44,12 +44,21 @@ configuration-file ACLs.
 ## Boundaries
 
 The proxy configurator is responsible for the hostname-and-port allowlist,
-GOST acquisition and verification, loopback-only binding, service lifecycle,
+proxy acquisition and verification, loopback-only binding, service lifecycle,
 and proxy health. `agent-win-sandbox` orchestrates the proxy first and calls
 `apply` only after the listener is ready.
 
 This remains a host-scoped, attribution-dependent control. Validate all
 brokered and virtualized networking paths in the actual deployment.
+
+ICMP echo requests through `IcmpSendEcho` and `Icmp6SendEcho2` remained usable
+in a Windows build 26100 Sandbox probe with additional SID-scoped ICMP filters
+installed and verified. The WFP trace attributed the requests to `SYSTEM`
+(`S-1-5-18`, PID 4), so the target SID's filters did not match. A machine-wide
+block affected both accounts and does not satisfy this per-account contract.
+See [ICMP probe evidence](icmp-evidence.md). The results cover loopback echo
+requests; they do not establish complete ICMP coverage or a working per-user
+driver solution.
 
 One brokered path is known to be open: DNS lookups delegated to the DNS Client
 service (`Dnscache`). The service sends the query as `NT AUTHORITY\NETWORK

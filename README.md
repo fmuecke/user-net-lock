@@ -49,6 +49,16 @@ WFP attribution is host-scoped, not a VM or network boundary. Test WSL,
 containers, virtual machines, BITS, and other brokered paths in the deployment
 that relies on it.
 
+### Known limitation: ICMP echo is not blocked per account
+
+In a Windows Sandbox probe on build 26100, `IcmpSendEcho` and
+`Icmp6SendEcho2` still received loopback replies after adding and verifying
+SID-scoped ICMP blocks. WFP attributed the requests to `SYSTEM` rather than
+the calling account, so the account's filters did not match. A machine-wide
+block stopped both test accounts and is outside this tool's per-account
+contract. See the [ICMP probe evidence](docs/icmp-evidence.md) for the results
+and their limits.
+
 ### Known limitation: DNS lookups are not blocked
 
 The policy does not stop the managed account from resolving hostnames
