@@ -1,3 +1,5 @@
+<!-- Project URL: https://github.com/fmuecke/user-net-lock -->
+
 # user-net-lock
 
 `user-net-lock.exe` is the small, elevated enforcement primitive for Agent Sandbox.
@@ -85,7 +87,7 @@ limiting which resolvers the DNS Client service can reach.
 ```
 
 The script builds Release and runs CTest. Use `-Configuration Debug` for a
-Debug build.
+Debug build, or `-SkipFormatting` to skip automatic source formatting.
 
 ### Elevated integration test in Windows Sandbox
 
