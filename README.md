@@ -1,6 +1,6 @@
 <!-- Project URL: https://github.com/fmuecke/user-net-lock -->
 
-# user-net-lock
+# user-net-lock [![Windows build](https://github.com/fmuecke/user-net-lock/actions/workflows/build.yml/badge.svg)](https://github.com/fmuecke/user-net-lock/actions/workflows/build.yml)
 
 `user-net-lock.exe` is the small, elevated enforcement primitive for Agent Sandbox.
 For one Windows account and one loopback proxy port, it creates, verifies, or
