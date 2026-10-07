@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Florian Mücke
-# SPDX-License-Identifier: GPL-3.0-only
-# Project: https://github.com/fmuecke/user-net-lock.git
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Project: https://github.com/fmuecke/wfp-lock.git
 
 # Uses the shared Windows Sandbox helper to run elevated tests without messing up the dev system.
 #
@@ -32,11 +32,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-$integrationExecutable = Join-Path $repositoryRoot 'out\build\user-net-lock-integration-tests.exe'
+$integrationExecutable = Join-Path $repositoryRoot 'out\build\wfp-lock-integration-tests.exe'
 if (-not (Test-Path -LiteralPath $integrationExecutable -PathType Leaf)) {
     throw "The integration executable was not built: $integrationExecutable"
 }
-$trafficIntegrationExecutable = Join-Path $repositoryRoot 'out\build\user-net-lock-traffic-integration-tests.exe'
+$trafficIntegrationExecutable = Join-Path $repositoryRoot 'out\build\wfp-lock-traffic-integration-tests.exe'
 if (-not (Test-Path -LiteralPath $trafficIntegrationExecutable -PathType Leaf)) {
     throw "The traffic integration executable was not built: $trafficIntegrationExecutable"
 }
@@ -83,7 +83,7 @@ Invoke-WindowsSandboxTest `
         throw "The sandbox test-account provisioning failed with exit code $($provision.ExitCode).`n$($provision.Output)"
     }
 
-    $testCommand = 'cmd.exe /d /c "user-net-lock-integration-tests.exe {0} {1} > {2}\result.txt 2>&1"' -f $testAccounts[0], $testAccounts[1], $sandbox.GuestMountPath
+    $testCommand = 'cmd.exe /d /c "wfp-lock-integration-tests.exe {0} {1} > {2}\result.txt 2>&1"' -f $testAccounts[0], $testAccounts[1], $sandbox.GuestMountPath
     $execution = & $sandbox.InvokeCommand `
         -Command $testCommand `
         -Phase 'Guest integration tests' `
@@ -100,7 +100,7 @@ Invoke-WindowsSandboxTest `
         throw "The sandbox test did not report success.`n$result"
     }
 
-    $trafficCommand = 'cmd.exe /d /c "user-net-lock-traffic-integration-tests.exe {0} {1} > {2}\traffic-result.txt 2>&1"' -f $testAccounts[0], $testAccounts[1], $sandbox.GuestMountPath
+    $trafficCommand = 'cmd.exe /d /c "wfp-lock-traffic-integration-tests.exe {0} {1} > {2}\traffic-result.txt 2>&1"' -f $testAccounts[0], $testAccounts[1], $sandbox.GuestMountPath
     $trafficExecution = & $sandbox.InvokeCommand `
         -Command $trafficCommand `
         -Phase 'Guest traffic-enforcement integration test' `

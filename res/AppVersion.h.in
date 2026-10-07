@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Florian Mücke
-// SPDX-License-Identifier: GPL-3.0-only
-// Project: https://github.com/fmuecke/user-net-lock.git
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Project: https://github.com/fmuecke/wfp-lock.git
 
 #pragma once
 
 #include <string_view>
 
-namespace user_net_lock
+namespace wfp_lock
 {
 
 inline constexpr std::wstring_view AppVersion = L"@APP_VERSION@";
 
-} // namespace launch_as
+} // namespace wfp_lock

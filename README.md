@@ -1,8 +1,8 @@
-<!-- Project URL: https://github.com/fmuecke/user-net-lock -->
+<!-- Project URL: https://github.com/fmuecke/wfp-lock -->
 
-# user-net-lock [![Windows build](https://github.com/fmuecke/user-net-lock/actions/workflows/build.yml/badge.svg)](https://github.com/fmuecke/user-net-lock/actions/workflows/build.yml)
+# wfp-lock [![Windows build](https://github.com/fmuecke/wfp-lock/actions/workflows/build.yml/badge.svg)](https://github.com/fmuecke/wfp-lock/actions/workflows/build.yml)
 
-`user-net-lock.exe` is the small, elevated enforcement primitive for Agent Sandbox.
+`wfp-lock.exe` is the small, elevated enforcement primitive for Agent Sandbox.
 For one Windows account and one loopback proxy port, it creates, verifies, or
 removes a persistent WFP policy:
 
@@ -26,10 +26,10 @@ non-administrator account may run `verify` and `list` only for itself. An
 administrator may inspect any managed account.
 
 ```text
-user-net-lock apply --user <account> --port <port>
-user-net-lock verify --user <account> --port <port>
-user-net-lock remove --user <account>
-user-net-lock list --user <account>
+wfp-lock apply --user <account> --port <port>
+wfp-lock verify --user <account> --port <port>
+wfp-lock remove --user <account>
+wfp-lock list --user <account>
 ```
 
 `apply` replaces only this tool's existing filters for the selected account,
@@ -64,7 +64,7 @@ and their limits.
 ### Known limitation: DNS lookups are not blocked
 
 The policy does not stop the managed account from resolving hostnames
-([issue #1](https://github.com/fmuecke/user-net-lock/issues/1)). Windows
+([issue #1](https://github.com/fmuecke/wfp-lock/issues/1)). Windows
 resolver APIs such as `GetAddrInfoW` hand the lookup to the DNS Client service
 (`Dnscache`), which sends the query as `NT AUTHORITY\NETWORK SERVICE`. WFP
 attributes that traffic to the service, so the account's `ALE_USER_ID` filters
@@ -76,7 +76,7 @@ This was reproduced on Windows 11 build 26100 with the policy applied and
 verified. A per-user RPC filter on the DNS Client service's resolver interface
 was tried and had no effect.
 
-`user-net-lock` has no per-user control for this path. A deployment that needs
+`wfp-lock` has no per-user control for this path. A deployment that needs
 it closed has to restrict name resolution for the whole host, for example by
 limiting which resolvers the DNS Client service can reach.
 
@@ -107,7 +107,7 @@ weakens the provider, sublayer, and filter DACLs, requires `verify` to fail for
 each case, and reapplies to prove DACL repair. Finally, it proves repeated
 apply replaces a user's prior port policy and that removing one user's policy
 leaves the other's intact. The WFP changes and test accounts exist only in the
-Windows Sandbox guest; no host user-net-lock policy is modified.
+Windows Sandbox guest; no host wfp-lock policy is modified.
 
 The same runner also launches a real traffic-enforcement test as the two
 disposable accounts. It proves the target account can use the configured IPv4
@@ -125,3 +125,7 @@ module from GitHub. It pins both the published raw revision and its SHA-256
 before importing it. The module stages artifacts in a caller-owned host
 directory, runs its callback as `SYSTEM` by default, and stops the fresh guest
 afterward.
+
+## License
+
+[GPL-3.0-or-later](LICENSE) © 2026 Florian Mücke

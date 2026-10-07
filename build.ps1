@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Florian Mücke
-# SPDX-License-Identifier: GPL-3.0-only
-# Project: https://github.com/fmuecke/user-net-lock.git
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Project: https://github.com/fmuecke/wfp-lock.git
 
 
 [CmdletBinding()]
@@ -22,8 +22,8 @@ if ($IntegrationUser -or $IntegrationOtherUser) {
     if (-not $IntegrationUser -or -not $IntegrationOtherUser) {
         throw '-IntegrationUser and -IntegrationOtherUser must be supplied together.'
     }
-    $env:USER_NET_LOCK_INTEGRATION_USER = $IntegrationUser
-    $env:USER_NET_LOCK_INTEGRATION_OTHER_USER = $IntegrationOtherUser
+    $env:WFP_LOCK_INTEGRATION_USER = $IntegrationUser
+    $env:WFP_LOCK_INTEGRATION_OTHER_USER = $IntegrationOtherUser
 }
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'

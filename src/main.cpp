@@ -1,8 +1,8 @@
 // Copyright (C) 2026 Florian Mücke
-// SPDX-License-Identifier: GPL-3.0-only
-// Project : https: // github.com/fmuecke/user-net-lock.git
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Project : https: // github.com/fmuecke/wfp-lock.git
 
-#include "user_net_lock.h"
+#include "wfp_lock.h"
 
 #include <string_view>
 #include <vector>
@@ -22,5 +22,5 @@ int wmain(int argc, wchar_t** argv)
     {
         arguments.emplace_back(argv[index]);
     }
-    return user_net_lock::run(arguments);
+    return wfp_lock::run(arguments);
 }

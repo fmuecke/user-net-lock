@@ -1,8 +1,8 @@
 // Copyright (C) 2026 Florian Mücke
-// SPDX-License-Identifier: GPL-3.0-only
-// Project: https://github.com/fmuecke/user-net-lock.git
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Project: https://github.com/fmuecke/wfp-lock.git
 
-#include "user_net_lock.h"
+#include "wfp_lock.h"
 
 #include <array>
 #include <cstdint>
@@ -136,13 +136,13 @@ int run_user_port(std::wstring_view command, std::wstring_view user, std::wstrin
     const std::array arguments {
         command, std::wstring_view(L"--user"), user, std::wstring_view(L"--port"), port
     };
-    return user_net_lock::run(arguments);
+    return wfp_lock::run(arguments);
 }
 
 int run_remove(std::wstring_view user)
 {
     const std::array arguments {std::wstring_view(L"remove"), std::wstring_view(L"--user"), user};
-    return user_net_lock::run(arguments);
+    return wfp_lock::run(arguments);
 }
 
 class ScopedWcerrCapture
@@ -173,25 +173,25 @@ bool expect_verify_failure(std::wstring_view user, std::wstring_view port)
         exit_code = run_user_port(L"verify", user, port);
         diagnostic = errors.str();
     }
-    check(exit_code == static_cast<int>(user_net_lock::ExitCode::verification),
+    check(exit_code == static_cast<int>(wfp_lock::ExitCode::verification),
         "verify rejects the tampered WFP object");
-    if (exit_code != static_cast<int>(user_net_lock::ExitCode::verification))
+    if (exit_code != static_cast<int>(wfp_lock::ExitCode::verification))
     {
         std::wcerr << L"Unexpected verify result (" << exit_code << L"): " << diagnostic;
     }
-    return exit_code == static_cast<int>(user_net_lock::ExitCode::verification);
+    return exit_code == static_cast<int>(wfp_lock::ExitCode::verification);
 }
 
 bool reapply_and_verify(std::wstring_view user, std::wstring_view port)
 {
     const int apply = run_user_port(L"apply", user, port);
-    check(apply == static_cast<int>(user_net_lock::ExitCode::success),
+    check(apply == static_cast<int>(wfp_lock::ExitCode::success),
         "apply restores the expected policy");
     const int verify = run_user_port(L"verify", user, port);
-    check(verify == static_cast<int>(user_net_lock::ExitCode::success),
+    check(verify == static_cast<int>(wfp_lock::ExitCode::success),
         "verify accepts the restored policy");
-    return apply == static_cast<int>(user_net_lock::ExitCode::success) &&
-           verify == static_cast<int>(user_net_lock::ExitCode::success);
+    return apply == static_cast<int>(wfp_lock::ExitCode::success) &&
+           verify == static_cast<int>(wfp_lock::ExitCode::success);
 }
 
 std::vector<GUID> filter_keys(HANDLE engine)
@@ -333,12 +333,12 @@ void lifecycle_tests(HANDLE engine, std::wstring_view user)
         {
             FwpmFreeMemory0(reinterpret_cast<void**>(&filter));
         }
-        check(persistent, "each user-net-lock filter is persistent");
+        check(persistent, "each wfp-lock filter is persistent");
     }
 
-    check(run_remove(user) == static_cast<int>(user_net_lock::ExitCode::success),
+    check(run_remove(user) == static_cast<int>(wfp_lock::ExitCode::success),
         "remove deletes the disposable-account policy");
-    check(filter_keys(engine).empty(), "remove leaves no user-net-lock filters");
+    check(filter_keys(engine).empty(), "remove leaves no wfp-lock filters");
     check(!filter_container_grants_enumeration(engine, user),
         "remove revokes the account's WFP filter-enumeration access");
 
@@ -349,7 +349,7 @@ void lifecycle_tests(HANDLE engine, std::wstring_view user)
         FwpmFreeMemory0(reinterpret_cast<void**>(&provider));
     }
     check(provider_result == FWP_E_PROVIDER_NOT_FOUND,
-        "remove deletes the unreferenced user-net-lock provider");
+        "remove deletes the unreferenced wfp-lock provider");
 
     FWPM_SUBLAYER0* sublayer {};
     const DWORD sublayer_result = FwpmSubLayerGetByKey0(engine, &sublayer_key, &sublayer);
@@ -358,7 +358,7 @@ void lifecycle_tests(HANDLE engine, std::wstring_view user)
         FwpmFreeMemory0(reinterpret_cast<void**>(&sublayer));
     }
     check(sublayer_result == FWP_E_SUBLAYER_NOT_FOUND,
-        "remove deletes the unreferenced user-net-lock sublayer");
+        "remove deletes the unreferenced wfp-lock sublayer");
 }
 
 void tamper_provider(HANDLE engine, PACL dacl)
@@ -420,22 +420,22 @@ void idempotence_and_isolation_tests(std::wstring_view first_user, std::wstring_
     check(reapply_and_verify(second_user, second_port),
         "apply creates an independent second account policy");
     check(run_user_port(L"verify", first_user, replacement_port) ==
-              static_cast<int>(user_net_lock::ExitCode::success),
+              static_cast<int>(wfp_lock::ExitCode::success),
         "the first account policy remains valid after applying the second");
 
-    check(run_remove(first_user) == static_cast<int>(user_net_lock::ExitCode::success),
+    check(run_remove(first_user) == static_cast<int>(wfp_lock::ExitCode::success),
         "remove deletes only the first account policy");
     expect_verify_failure(first_user, replacement_port);
     check(run_user_port(L"verify", second_user, second_port) ==
-              static_cast<int>(user_net_lock::ExitCode::success),
+              static_cast<int>(wfp_lock::ExitCode::success),
         "the second account policy remains valid after removing the first");
 }
 
 void concurrent_apply_tests(std::wstring_view first_user, std::wstring_view second_user)
 {
-    check(run_remove(first_user) == static_cast<int>(user_net_lock::ExitCode::success),
+    check(run_remove(first_user) == static_cast<int>(wfp_lock::ExitCode::success),
         "remove prior first-account policy before concurrent apply");
-    check(run_remove(second_user) == static_cast<int>(user_net_lock::ExitCode::success),
+    check(run_remove(second_user) == static_cast<int>(wfp_lock::ExitCode::success),
         "remove prior second-account policy before concurrent apply");
 
     int first_result {};
@@ -445,15 +445,15 @@ void concurrent_apply_tests(std::wstring_view first_user, std::wstring_view seco
     first.join();
     second.join();
 
-    check(first_result == static_cast<int>(user_net_lock::ExitCode::success),
+    check(first_result == static_cast<int>(wfp_lock::ExitCode::success),
         "concurrent apply succeeds for the first account");
-    check(second_result == static_cast<int>(user_net_lock::ExitCode::success),
+    check(second_result == static_cast<int>(wfp_lock::ExitCode::success),
         "concurrent apply succeeds for the second account");
     check(run_user_port(L"verify", first_user, first_port) ==
-              static_cast<int>(user_net_lock::ExitCode::success),
+              static_cast<int>(wfp_lock::ExitCode::success),
         "first account retains shared-infrastructure status access after concurrent apply");
     check(run_user_port(L"verify", second_user, second_port) ==
-              static_cast<int>(user_net_lock::ExitCode::success),
+              static_cast<int>(wfp_lock::ExitCode::success),
         "second account retains shared-infrastructure status access after concurrent apply");
 }
 
@@ -463,7 +463,7 @@ int wmain(int argc, wchar_t** argv)
 {
     if (argc != 3)
     {
-        std::wcerr << L"Usage: user-net-lock-integration-tests <first-disposable-account> "
+        std::wcerr << L"Usage: wfp-lock-integration-tests <first-disposable-account> "
                       L"<second-disposable-account>\n";
         return EXIT_FAILURE;
     }
@@ -483,9 +483,9 @@ int wmain(int argc, wchar_t** argv)
         return EXIT_FAILURE;
     }
     Cleanup cleanup {first_user, second_user};
-    check(run_remove(first_user) == static_cast<int>(user_net_lock::ExitCode::success),
+    check(run_remove(first_user) == static_cast<int>(wfp_lock::ExitCode::success),
         "remove any prior first-account policy");
-    check(run_remove(second_user) == static_cast<int>(user_net_lock::ExitCode::success),
+    check(run_remove(second_user) == static_cast<int>(wfp_lock::ExitCode::success),
         "remove any prior second-account policy");
 
     Engine engine;
@@ -525,11 +525,11 @@ int wmain(int argc, wchar_t** argv)
         return EXIT_FAILURE;
     }
 
-    check(run_remove(first_user) == static_cast<int>(user_net_lock::ExitCode::success),
+    check(run_remove(first_user) == static_cast<int>(wfp_lock::ExitCode::success),
         "remove first-account DACL test policy");
     idempotence_and_isolation_tests(first_user, second_user);
     concurrent_apply_tests(first_user, second_user);
-    check(run_remove(second_user) == static_cast<int>(user_net_lock::ExitCode::success),
+    check(run_remove(second_user) == static_cast<int>(wfp_lock::ExitCode::success),
         "remove second-account policy");
     if (failures != 0)
     {

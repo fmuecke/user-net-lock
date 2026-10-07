@@ -1,8 +1,8 @@
 // Copyright (C) 2026 Florian Mücke
-// SPDX-License-Identifier: GPL-3.0-only
-// Project: https://github.com/fmuecke/user-net-lock.git
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Project: https://github.com/fmuecke/wfp-lock.git
 
-#include "user_net_lock.h"
+#include "wfp_lock.h"
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -442,13 +442,13 @@ int run_user_port(std::wstring_view command, std::wstring_view user, std::wstrin
     const std::array arguments {
         command, std::wstring_view(L"--user"), user, std::wstring_view(L"--port"), port
     };
-    return user_net_lock::run(arguments);
+    return wfp_lock::run(arguments);
 }
 
 int run_remove(std::wstring_view user)
 {
     const std::array arguments {std::wstring_view(L"remove"), std::wstring_view(L"--user"), user};
-    return user_net_lock::run(arguments);
+    return wfp_lock::run(arguments);
 }
 
 bool set_test_password(std::wstring_view user)
@@ -475,23 +475,23 @@ struct Cleanup
 void traffic_enforcement_tests(std::wstring_view target, std::wstring_view other)
 {
     Cleanup cleanup {target, other};
-    check(run_remove(target) == static_cast<int>(user_net_lock::ExitCode::success),
+    check(run_remove(target) == static_cast<int>(wfp_lock::ExitCode::success),
         "remove any prior target policy");
-    check(run_remove(other) == static_cast<int>(user_net_lock::ExitCode::success),
+    check(run_remove(other) == static_cast<int>(wfp_lock::ExitCode::success),
         "remove any prior control-account policy");
     check(set_test_password(target), "set disposable target-account password");
     check(set_test_password(other), "set disposable control-account password");
     check(run_user_port(L"apply", target, proxy_port) ==
-              static_cast<int>(user_net_lock::ExitCode::success),
+              static_cast<int>(wfp_lock::ExitCode::success),
         "apply target loopback policy");
     check(launch_status_probe(target, traffic_password, L"verify", target, proxy_port) ==
-              static_cast<int>(user_net_lock::ExitCode::success),
+              static_cast<int>(wfp_lock::ExitCode::success),
         "managed standard account verifies its own policy");
     check(launch_status_probe(target, traffic_password, L"list", target) ==
-              static_cast<int>(user_net_lock::ExitCode::success),
+              static_cast<int>(wfp_lock::ExitCode::success),
         "managed standard account lists its own filters");
     check(launch_status_probe(other, traffic_password, L"verify", target, proxy_port) ==
-              static_cast<int>(user_net_lock::ExitCode::precondition),
+              static_cast<int>(wfp_lock::ExitCode::precondition),
         "another standard account cannot inspect the target policy");
     check(launch_mutation_probe(target, traffic_password) == EXIT_SUCCESS,
         "managed standard account cannot weaken the provider DACL through the WFP API");
@@ -637,14 +637,14 @@ int wmain(int argc, wchar_t** argv)
                 std::wstring_view(L"--port"),
                 std::wstring_view(argv[4])
             };
-            return user_net_lock::run(arguments);
+            return wfp_lock::run(arguments);
         }
         if (std::wstring_view(argv[2]) == L"list" && argc == 4)
         {
             const std::array arguments {
                 std::wstring_view(L"list"), std::wstring_view(L"--user"), std::wstring_view(argv[3])
             };
-            return user_net_lock::run(arguments);
+            return wfp_lock::run(arguments);
         }
         return EXIT_FAILURE;
     }
@@ -654,7 +654,7 @@ int wmain(int argc, wchar_t** argv)
     }
     if (argc != 3)
     {
-        std::wcerr << L"Usage: user-net-lock-traffic-integration-tests <target-account> "
+        std::wcerr << L"Usage: wfp-lock-traffic-integration-tests <target-account> "
                       L"<control-account>\n";
         return EXIT_FAILURE;
     }

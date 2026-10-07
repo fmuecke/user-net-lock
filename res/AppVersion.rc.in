@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Florian Mücke
-// SPDX-License-Identifier: GPL-3.0-only
-// Project: https://github.com/fmuecke/user-net-lock.git
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Project: https://github.com/fmuecke/wfp-lock.git
 
 #pragma code_page(65001)
 #include <windows.h>
@@ -28,7 +28,7 @@ BEGIN
             VALUE "InternalName", "@APP_INTERNAL_NAME@\0"
             VALUE "LegalCopyright", "Copyright (c) 2026 Florian Mücke\0"
             VALUE "OriginalFilename", "@APP_ORIGINAL_FILENAME@\0"
-            VALUE "ProductName", "user-net-lock\0"
+            VALUE "ProductName", "wfp-lock\0"
             VALUE "ProductVersion", "@APP_VERSION@\0"
         END
     END

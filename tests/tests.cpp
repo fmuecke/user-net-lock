@@ -1,9 +1,9 @@
 // Copyright (C) 2026 Florian Mücke
-// SPDX-License-Identifier: GPL-3.0-only
-// Project: https://github.com/fmuecke/user-net-lock.git
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Project: https://github.com/fmuecke/wfp-lock.git
 
 #include "wfp_object_access.h"
-#include "user_net_lock.h"
+#include "wfp_lock.h"
 
 #include <cstdlib>
 #include <cwchar>
@@ -28,39 +28,38 @@ void check(bool condition, std::string_view message)
 
 void cli_tests()
 {
-    check(user_net_lock::run({}) == static_cast<int>(user_net_lock::ExitCode::usage),
+    check(wfp_lock::run({}) == static_cast<int>(wfp_lock::ExitCode::usage),
         "empty CLI is a usage error");
 
     constexpr std::wstring_view unknown[] = {L"unknown"};
-    check(user_net_lock::run(unknown) == static_cast<int>(user_net_lock::ExitCode::usage),
+    check(wfp_lock::run(unknown) == static_cast<int>(wfp_lock::ExitCode::usage),
         "unknown command is a usage error");
 
     for (const auto command : {L"apply", L"verify"})
     {
         const std::wstring_view missing_port[] = {command, L"--user", L"AgentSandbox"};
-        check(user_net_lock::run(missing_port) == static_cast<int>(user_net_lock::ExitCode::usage),
+        check(wfp_lock::run(missing_port) == static_cast<int>(wfp_lock::ExitCode::usage),
             "apply and verify require a user and port");
 
         const std::wstring_view config_file[] = {command, L"--config", L"policy.ini"};
-        check(user_net_lock::run(config_file) == static_cast<int>(user_net_lock::ExitCode::usage),
+        check(wfp_lock::run(config_file) == static_cast<int>(wfp_lock::ExitCode::usage),
             "configuration files are not accepted");
     }
 
     constexpr std::wstring_view remove_config[] = {L"remove", L"--config", L"policy.ini"};
-    check(user_net_lock::run(remove_config) == static_cast<int>(user_net_lock::ExitCode::usage),
+    check(wfp_lock::run(remove_config) == static_cast<int>(wfp_lock::ExitCode::usage),
         "remove does not accept a configuration file");
 
     constexpr std::wstring_view missing_remove_user[] = {L"remove"};
-    check(
-        user_net_lock::run(missing_remove_user) == static_cast<int>(user_net_lock::ExitCode::usage),
+    check(wfp_lock::run(missing_remove_user) == static_cast<int>(wfp_lock::ExitCode::usage),
         "remove requires a user");
 
     constexpr std::wstring_view invalid_list[] = {L"list"};
-    check(user_net_lock::run(invalid_list) == static_cast<int>(user_net_lock::ExitCode::usage),
+    check(wfp_lock::run(invalid_list) == static_cast<int>(wfp_lock::ExitCode::usage),
         "list requires a user");
 
     constexpr std::wstring_view removed_clear[] = {L"clear", L"--user", L"AgentSandbox"};
-    check(user_net_lock::run(removed_clear) == static_cast<int>(user_net_lock::ExitCode::usage),
+    check(wfp_lock::run(removed_clear) == static_cast<int>(wfp_lock::ExitCode::usage),
         "clear is no longer an alias for remove");
 }
 
@@ -80,8 +79,7 @@ void wfp_object_access_control_tests()
     // P prevents inherited WFP engine ACEs from widening the administrative
     // baseline. A managed account receives a separate, read-only ACE.
     constexpr wchar_t expected_sddl[] = L"D:P(A;;GA;;;SY)(A;;GA;;;BA)";
-    check(
-        std::wcscmp(user_net_lock::detail::administrative_wfp_object_dacl_sddl, expected_sddl) == 0,
+    check(std::wcscmp(wfp_lock::detail::administrative_wfp_object_dacl_sddl, expected_sddl) == 0,
         "WFP objects retain SYSTEM and Administrators full control baseline");
 
     PSECURITY_DESCRIPTOR expected =
@@ -91,9 +89,9 @@ void wfp_object_access_control_tests()
     {
         return;
     }
-    check(user_net_lock::detail::same_access_control_descriptor(expected, expected),
+    check(wfp_lock::detail::same_access_control_descriptor(expected, expected),
         "the expected WFP object DACL matches itself");
-    check(user_net_lock::detail::has_protected_dacl(expected),
+    check(wfp_lock::detail::has_protected_dacl(expected),
         "the expected WFP object DACL is protected");
 
     PSECURITY_DESCRIPTOR unprotected =
@@ -103,7 +101,7 @@ void wfp_object_access_control_tests()
     {
         return;
     }
-    check(!user_net_lock::detail::has_protected_dacl(unprotected),
+    check(!wfp_lock::detail::has_protected_dacl(unprotected),
         "an unprotected WFP object DACL is rejected");
 
     // A managed account may read status, but no standard account may receive
@@ -114,7 +112,7 @@ void wfp_object_access_control_tests()
     {
         return;
     }
-    check(!user_net_lock::detail::same_access_control_descriptor(broader, expected),
+    check(!wfp_lock::detail::same_access_control_descriptor(broader, expected),
         "a WFP object DACL that grants a managed account write access is rejected");
 }
 

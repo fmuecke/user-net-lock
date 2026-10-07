@@ -1,12 +1,12 @@
 // Copyright (C) 2026 Florian Mücke
-// SPDX-License-Identifier: GPL-3.0-only
-// Project: https://github.com/fmuecke/user-net-lock.git
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Project: https://github.com/fmuecke/wfp-lock.git
 
 #pragma once
 
 #include <windows.h>
 
-namespace user_net_lock::detail
+namespace wfp_lock::detail
 {
 
 // WFP policy objects are administrative settings. P protects this DACL from
@@ -19,4 +19,4 @@ bool same_access_control_descriptor(PSECURITY_DESCRIPTOR actual, PSECURITY_DESCR
 
 bool has_protected_dacl(PSECURITY_DESCRIPTOR descriptor);
 
-} // namespace user_net_lock::detail
+} // namespace wfp_lock::detail

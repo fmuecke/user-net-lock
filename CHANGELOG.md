@@ -1,11 +1,15 @@
 # Changelog
 
+## [0.9.0] - 2026-10-07
+
+- Changed: Changed name to `wfp-lock`.
+
 ## [0.8.1] - 2026-10-04
 
 - Added: Windows/MSVC CI builds Release and runs non-mutating CTest on every push and pull
-  request. It uploads a ZIP with `user-net-lock.exe`, `README.md`, `LICENSE`, and `CHANGELOG.md`,
+  request. It uploads a ZIP with `wfp-lock.exe`, `README.md`, `LICENSE`, and `CHANGELOG.md`,
   plus separate test logs.
-- Added: Version tags publish `user-net-lock-v<version>-win64.zip` with changelog notes and
+- Added: Version tags publish `wfp-lock-v<version>-win64.zip` with changelog notes and
   provenance attestations for the ZIP and executable. Tags must match the binary version.
 - Added: GPL-3.0 license text in the repository.
 - Changed: `build.ps1 -SkipFormatting` skips source formatting.
