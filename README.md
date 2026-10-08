@@ -33,7 +33,7 @@ wfp-lock verify --user <account> [--allow <endpoints>]
 wfp-lock allow  --user <account> <endpoints>
 wfp-lock revoke --user <account> <endpoints>
 wfp-lock remove --user <account>
-wfp-lock list   --user <account>
+wfp-lock list   [--user <account>]
 ```
 
 `<endpoints>` is a comma-separated list without spaces, for example
@@ -54,7 +54,8 @@ a policy that lacks the endpoints set by `apply`. Revoking an endpoint that is
 not installed changes nothing.
 
 `remove` deletes only this tool's filters for the selected account. `list`
-prints those filters, including any left from a different allow set.
+prints those filters, including any left from a different allow set. Without
+`--user`, `list` uses the current process account.
 
 A direct endpoint bypasses any proxy, and it is tied to its IP address: if the
 service moves, reapply the policy. If the address is shared, for example by a

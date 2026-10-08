@@ -13,7 +13,7 @@ wfp-lock verify --user AgentSandbox --allow 127.0.0.1:8080,[::1]:8080
 wfp-lock allow  --user AgentSandbox 10.1.2.3:5432
 wfp-lock revoke --user AgentSandbox 10.1.2.3:5432
 wfp-lock remove --user AgentSandbox
-wfp-lock list   --user AgentSandbox
+wfp-lock list   [--user AgentSandbox]
 ```
 
 An endpoint list is comma-separated, without spaces or empty entries. Each
@@ -50,7 +50,8 @@ nothing; revoking every endpoint leaves a block-only policy.
 `verify` succeeds only if the installed filters exactly match the given allow
 set. `remove` deletes only this tool's filters for the account. The shared
 provider and sublayer are deleted once no filter refers to them. `list` prints
-the account's filters, including those left from a different allow set.
+the account's filters, including those left from a different allow set. Without
+`--user`, `list` uses the current process token's user SID.
 
 ## Filters
 

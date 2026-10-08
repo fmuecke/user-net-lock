@@ -1330,7 +1330,8 @@ Result<void> ensure_infrastructure(HANDLE engine, const std::vector<std::byte>& 
 
 std::array<UINT8, 16> mapped_v6(std::uint32_t address_v4)
 {
-    return {0,
+    return {
+        0,
         0,
         0,
         0,
@@ -1345,7 +1346,8 @@ std::array<UINT8, 16> mapped_v6(std::uint32_t address_v4)
         static_cast<UINT8>(address_v4 >> 24),
         static_cast<UINT8>(address_v4 >> 16),
         static_cast<UINT8>(address_v4 >> 8),
-        static_cast<UINT8>(address_v4)};
+        static_cast<UINT8>(address_v4)
+    };
 }
 
 std::vector<Rule> build_rules(std::span<const detail::Endpoint> allowed)
@@ -1373,10 +1375,8 @@ std::vector<Rule> build_rules(std::span<const detail::Endpoint> allowed)
         if (endpoint.address_v4)
         {
             // Dual-stack sockets connect to IPv4 through the mapped IPv6 form.
-            permit(FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-                endpoint.address_v4,
-                std::nullopt,
-                endpoint.port);
+            permit(
+                FWPM_LAYER_ALE_AUTH_CONNECT_V4, endpoint.address_v4, std::nullopt, endpoint.port);
             permit(FWPM_LAYER_ALE_AUTH_CONNECT_V6,
                 std::nullopt,
                 mapped_v6(*endpoint.address_v4),
@@ -1384,10 +1384,8 @@ std::vector<Rule> build_rules(std::span<const detail::Endpoint> allowed)
         }
         else
         {
-            permit(FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-                std::nullopt,
-                endpoint.address_v6,
-                endpoint.port);
+            permit(
+                FWPM_LAYER_ALE_AUTH_CONNECT_V6, std::nullopt, endpoint.address_v6, endpoint.port);
         }
     }
 
@@ -1993,11 +1991,17 @@ Result<std::optional<std::vector<detail::Endpoint>>> installed_allow_set(HANDLE 
             }
             // Validate the original permit before treating its values as an endpoint.
             // Keep accepting the legacy identity suffix during migration.
-            const std::vector<UINT8> data(filter.providerData.data,
-                filter.providerData.data + filter.providerData.size);
-            const Rule expected {&filter.layerKey, FWP_ACTION_PERMIT, permit_weight,
-                static_cast<std::uint8_t>(IPPROTO_TCP), endpoint.address_v4,
-                endpoint.address_v6, endpoint.port};
+            const std::vector<UINT8> data(
+                filter.providerData.data, filter.providerData.data + filter.providerData.size);
+            const Rule expected {
+                &filter.layerKey,
+                FWP_ACTION_PERMIT,
+                permit_weight,
+                static_cast<std::uint8_t>(IPPROTO_TCP),
+                endpoint.address_v4,
+                endpoint.address_v6,
+                endpoint.port
+            };
             if (!matches_rule(filter, expected, data, *user_sd))
             {
                 return malformed();
@@ -2079,8 +2083,7 @@ Result<void> change_command(
         {
             return std::unexpected(error(ExitCode::usage,
                 ERROR_INVALID_PARAMETER,
-                L"The policy would exceed " + std::to_wstring(max_allow_entries) +
-                    L" endpoints"));
+                L"The policy would exceed " + std::to_wstring(max_allow_entries) + L" endpoints"));
         }
     }
     else
@@ -2116,7 +2119,7 @@ Result<void> remove_command(std::wstring_view user)
 
 Result<void> list_command(std::wstring_view user)
 {
-    auto sid = resolve_account_sid(user);
+    auto sid = user.empty() ? current_user_sid() : resolve_account_sid(user);
     if (!sid)
     {
         return std::unexpected(sid.error());
@@ -2255,14 +2258,14 @@ void print_usage()
                << L"  wfp-lock.exe allow  --user <account> <endpoints>\n"
                << L"  wfp-lock.exe revoke --user <account> <endpoints>\n"
                << L"  wfp-lock.exe remove --user <account>\n"
-               << L"  wfp-lock.exe list   --user <account>\n"
+               << L"  wfp-lock.exe list   [--user <account>]\n"
                << L"\nCommands:\n"
                << L"  apply   Replace the policy with the given endpoints and verify it.\n"
                << L"  verify  Check that the installed policy has exactly these endpoints.\n"
                << L"  allow   Add endpoints to the installed policy and verify it.\n"
                << L"  revoke  Remove endpoints from the installed policy and verify it.\n"
                << L"  remove  Remove this tool's policy.\n"
-               << L"  list    List this tool's filters.\n"
+               << L"  list    List this tool's filters; defaults to the current user.\n"
                << L"\nOptions:\n"
                << L"  --user <account>     Local Windows account to which the policy applies.\n"
                << L"  --allow <endpoints>  Endpoints to permit. Without --allow, all outbound\n"
@@ -2327,6 +2330,10 @@ int run(std::span<const std::wstring_view> arguments)
         }
         return finish(change_command(input->user, input->allowed, Change::revoke),
             L"wfp-lock endpoints revoked; policy verified.");
+    }
+    if (arguments[0] == L"list" && arguments.size() == 1)
+    {
+        return finish(list_command({}), L"wfp-lock filters listed.");
     }
     if (arguments[0] == L"remove" || arguments[0] == L"list")
     {

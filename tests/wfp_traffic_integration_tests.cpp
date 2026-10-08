@@ -440,8 +440,9 @@ int mutation_probe()
 
 int run_policy(std::wstring_view command, std::wstring_view user, std::wstring_view allowed)
 {
-    const std::array arguments {command, std::wstring_view(L"--user"), user,
-        std::wstring_view(L"--allow"), allowed};
+    const std::array arguments {
+        command, std::wstring_view(L"--user"), user, std::wstring_view(L"--allow"), allowed
+    };
     return wfp_lock::run(arguments);
 }
 
@@ -507,6 +508,9 @@ void traffic_enforcement_tests(std::wstring_view target, std::wstring_view other
     check(launch_status_probe(target, traffic_password, L"list", target) ==
               static_cast<int>(wfp_lock::ExitCode::success),
         "managed standard account lists its own filters");
+    check(launch_status_probe(target, traffic_password, L"list", L"") ==
+              static_cast<int>(wfp_lock::ExitCode::success),
+        "managed standard account lists its own filters without --user");
     check(launch_status_probe(other, traffic_password, L"verify", target, allowed) ==
               static_cast<int>(wfp_lock::ExitCode::precondition),
         "another standard account cannot inspect the target policy");
@@ -644,15 +648,22 @@ int wmain(int argc, wchar_t** argv)
     {
         return winsock.available() ? socket_probe(argv[2], argv[3], argv[4]) : EXIT_FAILURE;
     }
-    if (argc >= 4 && std::wstring_view(argv[1]) == L"--status-probe")
+    if (argc >= 3 && std::wstring_view(argv[1]) == L"--status-probe")
     {
         if (std::wstring_view(argv[2]) == L"verify" && argc == 5)
         {
-            const std::array arguments {std::wstring_view(L"verify"),
+            const std::array arguments {
+                std::wstring_view(L"verify"),
                 std::wstring_view(L"--user"),
                 std::wstring_view(argv[3]),
                 std::wstring_view(L"--allow"),
-                std::wstring_view(argv[4])};
+                std::wstring_view(argv[4])
+            };
+            return wfp_lock::run(arguments);
+        }
+        if (std::wstring_view(argv[2]) == L"list" && argc == 3)
+        {
+            constexpr std::wstring_view arguments[] = {L"list"};
             return wfp_lock::run(arguments);
         }
         if (std::wstring_view(argv[2]) == L"list" && argc == 4)

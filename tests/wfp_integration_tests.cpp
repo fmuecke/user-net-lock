@@ -483,7 +483,6 @@ void concurrent_apply_tests(std::wstring_view first_user, std::wstring_view seco
         "second account retains shared-infrastructure status access after concurrent apply");
 }
 
-
 int quiet_run_policy(std::wstring_view command, std::wstring_view user,
     std::initializer_list<std::wstring_view> allowed)
 {
@@ -502,15 +501,15 @@ void allow_set_tests(HANDLE engine, std::wstring_view user)
 
     check(run_policy(L"apply", user, {proxy_v4, proxy_v6, direct_v4, direct_v6}) == success,
         "apply installs loopback and direct endpoints");
-    check(filter_keys(engine).size() == 10,
-        "two IPv4 and two IPv6 endpoints create ten filters");
+    check(filter_keys(engine).size() == 10, "two IPv4 and two IPv6 endpoints create ten filters");
     check(run_policy(L"verify", user, {direct_v6, proxy_v6, direct_v4, proxy_v4, direct_v4}) ==
               success,
         "verify ignores allow-set order and repeated entries");
     check(quiet_run_policy(L"verify", user, {proxy_v4, proxy_v6, direct_v4}) == verification,
         "verify rejects an allow set missing an installed endpoint");
-    check(quiet_run_policy(L"verify", user, {proxy_v4, proxy_v6, direct_v4, direct_v6,
-              L"192.0.2.11:5432"}) == verification,
+    check(quiet_run_policy(L"verify",
+              user,
+              {proxy_v4, proxy_v6, direct_v4, direct_v6, L"192.0.2.11:5432"}) == verification,
         "verify rejects an allow set with an endpoint that is not installed");
 
     check(run_policy(L"apply", user, {}) == success, "apply without --allow blocks everything");
@@ -607,7 +606,8 @@ void malformed_permit_tests(HANDLE engine, std::wstring_view user)
                     }
                 }
                 const bool deleted = FwpmFilterDeleteByKey0(engine, &key) == ERROR_SUCCESS;
-                modified = deleted && FwpmFilterAdd0(engine, filter, nullptr, nullptr) == ERROR_SUCCESS;
+                modified =
+                    deleted && FwpmFilterAdd0(engine, filter, nullptr, nullptr) == ERROR_SUCCESS;
                 check(modified, "install a permit for ports greater than 5432");
             }
             FwpmFreeMemory0(reinterpret_cast<void**>(&filter));
@@ -629,10 +629,12 @@ void malformed_permit_tests(HANDLE engine, std::wstring_view user)
         }
         const auto remaining_keys = filter_keys(engine);
         check(remaining_keys.size() == original_keys.size() &&
-                  std::all_of(original_keys.begin(), original_keys.end(),
+                  std::all_of(original_keys.begin(),
+                      original_keys.end(),
                       [&](const GUID& key)
                       {
-                          return std::any_of(remaining_keys.begin(), remaining_keys.end(),
+                          return std::any_of(remaining_keys.begin(),
+                              remaining_keys.end(),
                               [&](const GUID& remaining) { return IsEqualGUID(key, remaining); });
                       }),
             "a rejected incremental change preserves the installed filters");

@@ -10,6 +10,7 @@
 #include <cwchar>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <sddl.h>
 #include <string>
 #include <string_view>
@@ -52,32 +53,37 @@ void cli_tests()
         check(wfp_lock::run(missing_value) == static_cast<int>(wfp_lock::ExitCode::usage),
             "--allow requires a value");
 
-        for (const auto invalid_list : {L"localhost:8080",
-                 L"",
-                 L"127.0.0.1:8080,",
-                 L",127.0.0.1:8080",
-                 L"127.0.0.1:8080,,[::1]:8080",
-                 L"127.0.0.1:8080, [::1]:8080",
-                 L"127.0.0.1:8080;[::1]:8080"})
+        for (const auto invalid_list :
+            {L"localhost:8080",
+                L"",
+                L"127.0.0.1:8080,",
+                L",127.0.0.1:8080",
+                L"127.0.0.1:8080,,[::1]:8080",
+                L"127.0.0.1:8080, [::1]:8080",
+                L"127.0.0.1:8080;[::1]:8080"})
         {
             const std::wstring_view invalid_value[] = {
-                command, L"--user", L"AgentSandbox", L"--allow", invalid_list};
+                command, L"--user", L"AgentSandbox", L"--allow", invalid_list
+            };
             check(wfp_lock::run(invalid_value) == static_cast<int>(wfp_lock::ExitCode::usage),
                 "an invalid --allow list is a usage error");
         }
 
-        const std::wstring_view repeated_allow[] = {command,
+        const std::wstring_view repeated_allow[] = {
+            command,
             L"--user",
             L"AgentSandbox",
             L"--allow",
             L"127.0.0.1:8080",
             L"--allow",
-            L"[::1]:8080"};
+            L"[::1]:8080"
+        };
         check(wfp_lock::run(repeated_allow) == static_cast<int>(wfp_lock::ExitCode::usage),
             "--allow may be given only once");
 
         const std::wstring_view removed_port[] = {
-            command, L"--user", L"AgentSandbox", L"--port", L"8080"};
+            command, L"--user", L"AgentSandbox", L"--port", L"8080"
+        };
         check(wfp_lock::run(removed_port) == static_cast<int>(wfp_lock::ExitCode::usage),
             "--port is no longer accepted");
 
@@ -88,11 +94,12 @@ void cli_tests()
         std::wstring too_many_list;
         for (int port = 1; port <= 33; ++port)
         {
-            too_many_list += (port == 1 ? L"" : L",") + std::wstring(L"127.0.0.1:") +
-                             std::to_wstring(port);
+            too_many_list +=
+                (port == 1 ? L"" : L",") + std::wstring(L"127.0.0.1:") + std::to_wstring(port);
         }
         const std::wstring_view too_many[] = {
-            command, L"--user", L"AgentSandbox", L"--allow", too_many_list};
+            command, L"--user", L"AgentSandbox", L"--allow", too_many_list
+        };
         check(wfp_lock::run(too_many) == static_cast<int>(wfp_lock::ExitCode::usage),
             "more than 32 --allow endpoints are rejected");
     }
@@ -104,7 +111,8 @@ void cli_tests()
             "allow and revoke require an endpoint list");
 
         const std::wstring_view option_form[] = {
-            command, L"--user", L"AgentSandbox", L"--allow", L"10.1.2.3:5432"};
+            command, L"--user", L"AgentSandbox", L"--allow", L"10.1.2.3:5432"
+        };
         check(wfp_lock::run(option_form) == static_cast<int>(wfp_lock::ExitCode::usage),
             "allow and revoke take the endpoint list as a positional argument");
 
@@ -113,7 +121,8 @@ void cli_tests()
             "allow and revoke reject an empty user");
 
         const std::wstring_view invalid_list[] = {
-            command, L"--user", L"AgentSandbox", L"10.1.2.3:5432,"};
+            command, L"--user", L"AgentSandbox", L"10.1.2.3:5432,"
+        };
         check(wfp_lock::run(invalid_list) == static_cast<int>(wfp_lock::ExitCode::usage),
             "allow and revoke reject an invalid endpoint list");
     }
@@ -126,13 +135,49 @@ void cli_tests()
     check(wfp_lock::run(missing_remove_user) == static_cast<int>(wfp_lock::ExitCode::usage),
         "remove requires a user");
 
-    constexpr std::wstring_view invalid_list[] = {L"list"};
-    check(wfp_lock::run(invalid_list) == static_cast<int>(wfp_lock::ExitCode::usage),
-        "list requires a user");
+    constexpr std::wstring_view missing_list_user[] = {L"list", L"--user"};
+    check(wfp_lock::run(missing_list_user) == static_cast<int>(wfp_lock::ExitCode::usage),
+        "list --user requires a value");
+
+    constexpr std::wstring_view empty_list_user[] = {L"list", L"--user", L""};
+    check(wfp_lock::run(empty_list_user) == static_cast<int>(wfp_lock::ExitCode::usage),
+        "list rejects an empty explicit user");
+
+    constexpr std::wstring_view unknown_list_option[] = {L"list", L"--all"};
+    check(wfp_lock::run(unknown_list_option) == static_cast<int>(wfp_lock::ExitCode::usage),
+        "list rejects unknown options");
 
     constexpr std::wstring_view removed_clear[] = {L"clear", L"--user", L"AgentSandbox"};
     check(wfp_lock::run(removed_clear) == static_cast<int>(wfp_lock::ExitCode::usage),
         "clear is no longer an alias for remove");
+}
+
+// Listing reads WFP state but does not modify it.
+void current_user_list_tests()
+{
+    wchar_t user[257] {};
+    DWORD size = static_cast<DWORD>(std::size(user));
+    const bool have_user = GetUserNameW(user, &size) != FALSE;
+    check(have_user, "read current user for list regression");
+    if (!have_user)
+    {
+        return;
+    }
+
+    std::wostringstream output;
+    auto* previous = std::wcout.rdbuf(output.rdbuf());
+    constexpr std::wstring_view implicit[] = {L"list"};
+    const int implicit_result = wfp_lock::run(implicit);
+    const auto implicit_output = output.str();
+    output.str(L"");
+    const std::wstring_view explicit_user[] = {L"list", L"--user", user};
+    const int explicit_result = wfp_lock::run(explicit_user);
+    std::wcout.rdbuf(previous);
+
+    check(implicit_result != static_cast<int>(wfp_lock::ExitCode::usage),
+        "list accepts an omitted user");
+    check(implicit_result == explicit_result && implicit_output == output.str(),
+        "list defaults to the current account and matches its explicit listing");
 }
 
 // A deliberately invalid local-account name keeps these CLI checks out of WFP.
@@ -144,8 +189,9 @@ void endpoint_limit_tests()
         list += (port == 1 ? L"" : L",") + std::wstring(L"127.0.0.1:") + std::to_wstring(port);
     }
     list += L",127.0.0.1:00001";
-    const std::wstring_view arguments[] = {L"verify", L"--user",
-        L".\\wfp-lock-endpoint-limit-invalid-account", L"--allow", list};
+    const std::wstring_view arguments[] = {
+        L"verify", L"--user", L".\\wfp-lock-endpoint-limit-invalid-account", L"--allow", list
+    };
     check(wfp_lock::run(arguments) == static_cast<int>(wfp_lock::ExitCode::precondition),
         "32 unique endpoints plus a duplicate pass parsing and reach account validation");
 }
@@ -260,6 +306,7 @@ void wfp_object_access_control_tests()
 int main()
 {
     cli_tests();
+    current_user_list_tests();
     endpoint_parsing_tests();
     endpoint_limit_tests();
     wfp_object_access_control_tests();
