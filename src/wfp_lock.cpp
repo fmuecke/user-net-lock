@@ -4,6 +4,7 @@
 
 #include "wfp_lock.h"
 
+#include "endpoint.h"
 #include "wfp_object_access.h"
 
 #include <algorithm>
@@ -15,6 +16,7 @@
 #include <expected>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -172,6 +174,85 @@ bool has_protected_dacl(PSECURITY_DESCRIPTOR descriptor)
            (control & SE_DACL_PROTECTED) != 0;
 }
 
+namespace
+{
+
+std::optional<std::uint16_t> parse_tcp_port(std::wstring_view text)
+{
+    if (text.empty() || text.size() > 5)
+    {
+        return std::nullopt;
+    }
+    std::uint32_t value {};
+    for (const wchar_t character : text)
+    {
+        if (character < L'0' || character > L'9')
+        {
+            return std::nullopt;
+        }
+        value = value * 10 + static_cast<std::uint32_t>(character - L'0');
+    }
+    if (value == 0 || value > 65535)
+    {
+        return std::nullopt;
+    }
+    return static_cast<std::uint16_t>(value);
+}
+
+} // namespace
+
+std::optional<Endpoint> parse_endpoint(std::wstring_view text)
+{
+    const auto separator = text.rfind(L':');
+    if (separator == std::wstring_view::npos || text.find(L'\0') != std::wstring_view::npos)
+    {
+        return std::nullopt;
+    }
+    const auto port = parse_tcp_port(text.substr(separator + 1));
+    if (!port)
+    {
+        return std::nullopt;
+    }
+    const auto host = text.substr(0, separator);
+    Endpoint endpoint;
+    endpoint.port = *port;
+    if (host.size() >= 2 && host.front() == L'[' && host.back() == L']')
+    {
+        const std::wstring address(host.substr(1, host.size() - 2));
+        std::array<std::uint8_t, 16> bytes {};
+        if (InetPtonW(AF_INET6, address.c_str(), bytes.data()) != 1)
+        {
+            return std::nullopt;
+        }
+        constexpr std::array<std::uint8_t, 12> mapped_prefix {
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff
+        };
+        const bool unspecified = bytes == std::array<std::uint8_t, 16> {};
+        const bool multicast = bytes[0] == 0xff;
+        const bool mapped = std::equal(mapped_prefix.begin(), mapped_prefix.end(), bytes.begin());
+        if (unspecified || multicast || mapped)
+        {
+            return std::nullopt;
+        }
+        endpoint.address_v6 = bytes;
+        return endpoint;
+    }
+    const std::wstring address(host);
+    IN_ADDR value {};
+    if (InetPtonW(AF_INET, address.c_str(), &value) != 1)
+    {
+        return std::nullopt;
+    }
+    const std::uint32_t host_order = ntohl(value.s_addr);
+    const bool multicast = (host_order >> 28) == 0xE;
+    if (host_order == 0 || host_order == 0xFFFFFFFF || multicast)
+    {
+        return std::nullopt;
+    }
+    endpoint.address_v4 = host_order;
+    return endpoint;
+}
+
 } // namespace wfp_lock::detail
 
 namespace wfp_lock
@@ -188,10 +269,11 @@ constexpr GUID sublayer_key {
 constexpr std::uint64_t permit_weight = 0xF000000000000000ULL;
 constexpr std::uint64_t block_weight = 0x1000000000000000ULL;
 constexpr std::uint16_t sublayer_weight = 0x8000;
-constexpr std::array<UINT8, 16> loopback_v6 {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
-constexpr std::array<UINT8, 16> mapped_loopback_v6 {
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 127, 0, 0, 1
-};
+constexpr std::size_t max_allow_entries = 32;
+// Filters written by wfp-lock 0.9 and earlier append the loopback port to the policy identity.
+// They are still recognized so that apply and remove replace them.
+constexpr std::size_t legacy_port_suffix = sizeof(std::uint16_t);
+// The tag predates arbitrary endpoints; it is kept to identify existing policies.
 constexpr std::array<UINT8, 16> policy_tag {
     'w', 'f', 'p', '-', 'l', 'o', 'o', 'p', 'b', 'a', 'c', 'k', '-', 'v', '1', 0
 };
@@ -286,10 +368,10 @@ struct Rule
     std::optional<std::uint16_t> port;
 };
 
-struct UserPort
+struct PolicyInput
 {
     std::wstring user;
-    std::uint16_t port;
+    std::vector<detail::Endpoint> allowed;
 };
 
 Error error(ExitCode exit_code, std::uint32_t native_code, std::wstring message)
@@ -359,40 +441,6 @@ Result<SharedInfrastructureMutex> lock_shared_infrastructure()
     CloseHandle(mutex);
     return std::unexpected(
         win32_error(ExitCode::wfp, code, L"Wait for shared-infrastructure mutex"));
-}
-
-Result<std::uint16_t> parse_port(std::wstring_view text)
-{
-    if (text.empty())
-    {
-        return std::unexpected(error(ExitCode::usage,
-            ERROR_INVALID_DATA,
-            L"Port must be a decimal value between 1 and 65535"));
-    }
-    std::uint32_t value {};
-    for (const wchar_t character : text)
-    {
-        if (!std::iswdigit(character))
-        {
-            return std::unexpected(error(ExitCode::usage,
-                ERROR_INVALID_DATA,
-                L"Port must be a decimal value between 1 and 65535"));
-        }
-        value = value * 10 + static_cast<std::uint32_t>(character - L'0');
-        if (value > 65535)
-        {
-            return std::unexpected(error(ExitCode::usage,
-                ERROR_INVALID_DATA,
-                L"Port must be a decimal value between 1 and 65535"));
-        }
-    }
-    if (value == 0)
-    {
-        return std::unexpected(error(ExitCode::usage,
-            ERROR_INVALID_DATA,
-            L"Port must be a decimal value between 1 and 65535"));
-    }
-    return static_cast<std::uint16_t>(value);
 }
 
 Result<bool> is_elevated()
@@ -636,14 +684,6 @@ std::vector<UINT8> policy_identity(PSID sid)
     return identity;
 }
 
-std::vector<UINT8> policy_data(const std::vector<UINT8>& identity, std::uint16_t port)
-{
-    std::vector<UINT8> data = identity;
-    const auto* port_bytes = reinterpret_cast<const UINT8*>(&port);
-    data.insert(data.end(), port_bytes, port_bytes + sizeof(port));
-    return data;
-}
-
 bool same_blob(const FWP_BYTE_BLOB& blob, const std::vector<UINT8>& expected)
 {
     return blob.size == expected.size() && blob.data &&
@@ -654,7 +694,8 @@ bool is_owned_for(const FWPM_FILTER0& filter, const std::vector<UINT8>& identity
 {
     return filter.providerKey && IsEqualGUID(*filter.providerKey, provider_key) &&
            IsEqualGUID(filter.subLayerKey, sublayer_key) && filter.providerData.data &&
-           filter.providerData.size == identity.size() + sizeof(std::uint16_t) &&
+           (filter.providerData.size == identity.size() ||
+               filter.providerData.size == identity.size() + legacy_port_suffix) &&
            std::memcmp(filter.providerData.data, identity.data(), identity.size()) == 0;
 }
 
@@ -939,21 +980,26 @@ Result<std::vector<std::vector<std::byte>>> managed_policy_user_sids(HANDLE engi
         {
             if (!filter.providerKey || !IsEqualGUID(*filter.providerKey, provider_key) ||
                 !IsEqualGUID(filter.subLayerKey, sublayer_key) || !filter.providerData.data ||
-                filter.providerData.size < policy_tag.size() + sizeof(std::uint16_t) ||
+                filter.providerData.size < policy_tag.size() ||
                 std::memcmp(filter.providerData.data, policy_tag.data(), policy_tag.size()) != 0)
             {
                 return {};
             }
             const auto* sid = filter.providerData.data + policy_tag.size();
             const PSID policy_sid = const_cast<void*>(static_cast<const void*>(sid));
-            if (!IsValidSid(policy_sid))
+            const std::size_t sid_capacity = filter.providerData.size - policy_tag.size();
+            if (sid_capacity < SECURITY_SID_SIZE(0) ||
+                sid_capacity <
+                    SECURITY_SID_SIZE(static_cast<const SID*>(policy_sid)->SubAuthorityCount) ||
+                !IsValidSid(policy_sid))
             {
                 return std::unexpected(error(ExitCode::wfp,
                     ERROR_INVALID_DATA,
                     L"wfp-lock filter contains an invalid managed-account SID"));
             }
             const DWORD sid_size = GetLengthSid(policy_sid);
-            if (filter.providerData.size != policy_tag.size() + sid_size + sizeof(std::uint16_t))
+            if (filter.providerData.size != policy_tag.size() + sid_size &&
+                filter.providerData.size != policy_tag.size() + sid_size + legacy_port_suffix)
             {
                 return std::unexpected(error(ExitCode::wfp,
                     ERROR_INVALID_DATA,
@@ -1222,7 +1268,7 @@ Result<void> ensure_infrastructure(HANDLE engine, const std::vector<std::byte>& 
         new_provider.providerKey = provider_key;
         new_provider.displayData.name = const_cast<wchar_t*>(L"wfp-lock Provider");
         new_provider.displayData.description =
-            const_cast<wchar_t*>(L"Persistent per-user loopback-only filters");
+            const_cast<wchar_t*>(L"Persistent per-user outbound TCP allow lists");
         new_provider.flags = FWPM_PROVIDER_FLAG_PERSISTENT;
         code = FwpmProviderAdd0(engine,
             &new_provider,
@@ -1268,7 +1314,7 @@ Result<void> ensure_infrastructure(HANDLE engine, const std::vector<std::byte>& 
     new_sublayer.subLayerKey = sublayer_key;
     new_sublayer.displayData.name = const_cast<wchar_t*>(L"wfp-lock Sublayer");
     new_sublayer.displayData.description =
-        const_cast<wchar_t*>(L"Per-user loopback permits above default-deny blocks");
+        const_cast<wchar_t*>(L"Per-user TCP endpoint permits above default-deny blocks");
     new_sublayer.flags = FWPM_SUBLAYER_FLAG_PERSISTENT;
     new_sublayer.providerKey = const_cast<GUID*>(&provider_key);
     new_sublayer.weight = sublayer_weight;
@@ -1282,14 +1328,35 @@ Result<void> ensure_infrastructure(HANDLE engine, const std::vector<std::byte>& 
     return {};
 }
 
-std::vector<Rule> build_rules(std::uint16_t port)
+std::array<UINT8, 16> mapped_v6(std::uint32_t address_v4)
+{
+    return {0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0xff,
+        0xff,
+        static_cast<UINT8>(address_v4 >> 24),
+        static_cast<UINT8>(address_v4 >> 16),
+        static_cast<UINT8>(address_v4 >> 8),
+        static_cast<UINT8>(address_v4)};
+}
+
+std::vector<Rule> build_rules(std::span<const detail::Endpoint> allowed)
 {
     std::vector<Rule> rules;
     const auto permit = [&](const GUID& layer,
                             std::optional<std::uint32_t>
                                 address_v4,
                             std::optional<std::array<UINT8, 16>>
-                                address_v6)
+                                address_v6,
+                            std::uint16_t port)
     {
         rules.push_back(Rule {
             &layer,
@@ -1301,9 +1368,28 @@ std::vector<Rule> build_rules(std::uint16_t port)
             port
         });
     };
-    permit(FWPM_LAYER_ALE_AUTH_CONNECT_V4, 0x7f000001, std::nullopt);
-    permit(FWPM_LAYER_ALE_AUTH_CONNECT_V6, std::nullopt, loopback_v6);
-    permit(FWPM_LAYER_ALE_AUTH_CONNECT_V6, std::nullopt, mapped_loopback_v6);
+    for (const detail::Endpoint& endpoint : allowed)
+    {
+        if (endpoint.address_v4)
+        {
+            // Dual-stack sockets connect to IPv4 through the mapped IPv6 form.
+            permit(FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+                endpoint.address_v4,
+                std::nullopt,
+                endpoint.port);
+            permit(FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+                std::nullopt,
+                mapped_v6(*endpoint.address_v4),
+                endpoint.port);
+        }
+        else
+        {
+            permit(FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+                std::nullopt,
+                endpoint.address_v6,
+                endpoint.port);
+        }
+    }
 
     for (const GUID* layer : {&FWPM_LAYER_ALE_AUTH_CONNECT_V4, &FWPM_LAYER_ALE_AUTH_CONNECT_V6})
     {
@@ -1374,9 +1460,9 @@ Result<void> add_rule(HANDLE engine, const Rule& rule, FWP_BYTE_BLOB& user_descr
     weight.uint64 = const_cast<UINT64*>(&rule.weight);
     FWP_BYTE_BLOB provider_data {static_cast<UINT32>(data.size()), const_cast<UINT8*>(data.data())};
     FWPM_FILTER0 filter {};
-    filter.displayData.name = const_cast<wchar_t*>(L"wfp-lock loopback rule");
+    filter.displayData.name = const_cast<wchar_t*>(L"wfp-lock rule");
     filter.displayData.description =
-        const_cast<wchar_t*>(L"Per-user loopback proxy permit or default-deny rule");
+        const_cast<wchar_t*>(L"Per-user TCP endpoint permit or default-deny rule");
     filter.flags = FWPM_FILTER_FLAG_PERSISTENT;
     filter.providerKey = const_cast<GUID*>(&provider_key);
     filter.providerData = provider_data;
@@ -1570,7 +1656,7 @@ bool matches_rule(const FWPM_FILTER0& filter, const Rule& expected, const std::v
     return true;
 }
 
-Result<void> verify_loopback_policy(PSID sid, std::uint16_t port)
+Result<void> verify_policy(PSID sid, std::span<const detail::Endpoint> allowed)
 {
     auto engine = open_engine(ExitCode::verification);
     if (!engine)
@@ -1630,8 +1716,7 @@ Result<void> verify_loopback_policy(PSID sid, std::uint16_t port)
         return std::unexpected(sublayer_access.error());
     }
     const auto identity = policy_identity(sid);
-    const auto data = policy_data(identity, port);
-    const auto expected = build_rules(port);
+    const auto expected = build_rules(allowed);
     std::vector<bool> matched(expected.size());
     std::size_t found {};
     auto enumerated = enumerate_filters(engine->value,
@@ -1644,7 +1729,7 @@ Result<void> verify_loopback_policy(PSID sid, std::uint16_t port)
             ++found;
             for (std::size_t index = 0; index < expected.size(); ++index)
             {
-                if (!matched[index] && matches_rule(filter, expected[index], data, *user_sd))
+                if (!matched[index] && matches_rule(filter, expected[index], identity, *user_sd))
                 {
                     auto filter_access =
                         verify_filter_access(engine->value, filter.filterKey, *filter_sd);
@@ -1658,7 +1743,7 @@ Result<void> verify_loopback_policy(PSID sid, std::uint16_t port)
             }
             return std::unexpected(error(ExitCode::verification,
                 ERROR_INVALID_DATA,
-                L"Installed loopback policy contains an unexpected filter"));
+                L"Installed policy contains an unexpected filter"));
         });
     if (!enumerated)
     {
@@ -1669,19 +1754,14 @@ Result<void> verify_loopback_policy(PSID sid, std::uint16_t port)
     {
         return std::unexpected(error(ExitCode::verification,
             ERROR_INVALID_DATA,
-            L"Installed loopback filters do not match the "
-            L"requested user and port"));
+            L"Installed filters do not match the requested user and allow set"));
     }
     return {};
 }
 
-Result<void> apply_loopback_policy(PSID sid, std::uint16_t port)
+// The caller holds the shared-infrastructure lock.
+Result<void> apply_policy(PSID sid, std::span<const detail::Endpoint> allowed)
 {
-    auto infrastructure_lock = lock_shared_infrastructure();
-    if (!infrastructure_lock)
-    {
-        return std::unexpected(infrastructure_lock.error());
-    }
     auto engine = open_engine();
     if (!engine)
     {
@@ -1732,13 +1812,12 @@ Result<void> apply_loopback_policy(PSID sid, std::uint16_t port)
     FWP_BYTE_BLOB user_blob {
         static_cast<UINT32>(user_sd->size()), reinterpret_cast<UINT8*>(user_sd->data())
     };
-    const auto data = policy_data(identity, port);
-    for (const Rule& rule : build_rules(port))
+    for (const Rule& rule : build_rules(allowed))
     {
         auto added = add_rule(engine->value,
             rule,
             user_blob,
-            data,
+            identity,
             static_cast<PSECURITY_DESCRIPTOR>(filter_sd->data()));
         if (!added)
         {
@@ -1807,7 +1886,7 @@ std::wstring protocol_text(const FWPM_FILTER_CONDITION0* protocol)
     return L"<other protocol>";
 }
 
-Result<void> apply_command(std::wstring_view user, std::uint16_t port)
+Result<void> apply_command(std::wstring_view user, std::span<const detail::Endpoint> allowed)
 {
     auto elevated = require_elevation();
     if (!elevated)
@@ -1819,15 +1898,20 @@ Result<void> apply_command(std::wstring_view user, std::uint16_t port)
     {
         return std::unexpected(sid.error());
     }
-    auto applied = apply_loopback_policy(sid->data(), port);
+    auto infrastructure_lock = lock_shared_infrastructure();
+    if (!infrastructure_lock)
+    {
+        return std::unexpected(infrastructure_lock.error());
+    }
+    auto applied = apply_policy(sid->data(), allowed);
     if (!applied)
     {
         return std::unexpected(applied.error());
     }
-    return verify_loopback_policy(sid->data(), port);
+    return verify_policy(sid->data(), allowed);
 }
 
-Result<void> verify_command(std::wstring_view user, std::uint16_t port)
+Result<void> verify_command(std::wstring_view user, std::span<const detail::Endpoint> allowed)
 {
     auto sid = resolve_account_sid(user);
     if (!sid)
@@ -1839,7 +1923,163 @@ Result<void> verify_command(std::wstring_view user, std::uint16_t port)
     {
         return std::unexpected(authorized.error());
     }
-    return verify_loopback_policy(sid->data(), port);
+    return verify_policy(sid->data(), allowed);
+}
+
+// Reconstructs the allow set from the account's installed permit filters, or
+// returns nullopt when the account has no wfp-lock policy. An IPv4 entry's
+// mapped IPv6 permit is part of that entry. The caller verifies the result
+// after reapplying it.
+Result<std::optional<std::vector<detail::Endpoint>>> installed_allow_set(HANDLE engine, PSID sid)
+{
+    const auto identity = policy_identity(sid);
+    bool found {};
+    std::vector<detail::Endpoint> endpoints;
+    auto enumerated = enumerate_filters(engine,
+        [&](const FWPM_FILTER0& filter) -> Result<void>
+        {
+            if (!is_owned_for(filter, identity))
+            {
+                return {};
+            }
+            found = true;
+            if (filter.action.type != FWP_ACTION_PERMIT)
+            {
+                return {};
+            }
+            const auto* protocol = find_condition(filter, FWPM_CONDITION_IP_PROTOCOL);
+            const auto* address = find_condition(filter, FWPM_CONDITION_IP_REMOTE_ADDRESS);
+            const auto* port = find_condition(filter, FWPM_CONDITION_IP_REMOTE_PORT);
+            const auto malformed = []
+            {
+                return std::unexpected(error(ExitCode::verification,
+                    ERROR_INVALID_DATA,
+                    L"Installed policy contains a malformed permit; replace it with apply"));
+            };
+            if (!protocol || protocol->conditionValue.type != FWP_UINT8 ||
+                protocol->conditionValue.uint8 != IPPROTO_TCP || !address || !port ||
+                port->conditionValue.type != FWP_UINT16)
+            {
+                return malformed();
+            }
+            detail::Endpoint endpoint;
+            endpoint.port = port->conditionValue.uint16;
+            if (IsEqualGUID(filter.layerKey, FWPM_LAYER_ALE_AUTH_CONNECT_V4) &&
+                address->conditionValue.type == FWP_UINT32)
+            {
+                endpoint.address_v4 = address->conditionValue.uint32;
+            }
+            else if (IsEqualGUID(filter.layerKey, FWPM_LAYER_ALE_AUTH_CONNECT_V6) &&
+                     address->conditionValue.type == FWP_BYTE_ARRAY16_TYPE &&
+                     address->conditionValue.byteArray16)
+            {
+                std::array<UINT8, 16> bytes {};
+                std::memcpy(bytes.data(), address->conditionValue.byteArray16->byteArray16, 16);
+                constexpr std::array<UINT8, 12> mapped_prefix {
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff
+                };
+                if (std::equal(mapped_prefix.begin(), mapped_prefix.end(), bytes.begin()))
+                {
+                    return {};
+                }
+                endpoint.address_v6 = bytes;
+            }
+            else
+            {
+                return malformed();
+            }
+            endpoints.push_back(endpoint);
+            return {};
+        });
+    if (!enumerated)
+    {
+        return std::unexpected(enumerated.error());
+    }
+    if (!found)
+    {
+        return std::nullopt;
+    }
+    std::sort(endpoints.begin(), endpoints.end());
+    endpoints.erase(std::unique(endpoints.begin(), endpoints.end()), endpoints.end());
+    return endpoints;
+}
+
+enum class Change
+{
+    allow,
+    revoke,
+};
+
+Result<void> change_command(
+    std::wstring_view user, std::span<const detail::Endpoint> endpoints, Change change)
+{
+    auto elevated = require_elevation();
+    if (!elevated)
+    {
+        return std::unexpected(elevated.error());
+    }
+    auto sid = resolve_account_sid(user);
+    if (!sid)
+    {
+        return std::unexpected(sid.error());
+    }
+    // Hold the lock from reading the installed set until the new set is
+    // committed, so that concurrent changes cannot overwrite each other.
+    auto infrastructure_lock = lock_shared_infrastructure();
+    if (!infrastructure_lock)
+    {
+        return std::unexpected(infrastructure_lock.error());
+    }
+    std::optional<std::vector<detail::Endpoint>> installed;
+    {
+        auto engine = open_engine();
+        if (!engine)
+        {
+            return std::unexpected(engine.error());
+        }
+        auto read = installed_allow_set(engine->value, sid->data());
+        if (!read)
+        {
+            return std::unexpected(read.error());
+        }
+        installed = std::move(*read);
+    }
+    if (!installed)
+    {
+        return std::unexpected(error(ExitCode::precondition,
+            ERROR_NOT_FOUND,
+            L"No wfp-lock policy is installed for " + std::wstring(user) + L"; use apply"));
+    }
+    std::vector<detail::Endpoint> allowed;
+    if (change == Change::allow)
+    {
+        std::set_union(installed->begin(),
+            installed->end(),
+            endpoints.begin(),
+            endpoints.end(),
+            std::back_inserter(allowed));
+        if (allowed.size() > max_allow_entries)
+        {
+            return std::unexpected(error(ExitCode::usage,
+                ERROR_INVALID_PARAMETER,
+                L"The policy would exceed " + std::to_wstring(max_allow_entries) +
+                    L" endpoints"));
+        }
+    }
+    else
+    {
+        std::set_difference(installed->begin(),
+            installed->end(),
+            endpoints.begin(),
+            endpoints.end(),
+            std::back_inserter(allowed));
+    }
+    auto applied = apply_policy(sid->data(), allowed);
+    if (!applied)
+    {
+        return std::unexpected(applied.error());
+    }
+    return verify_policy(sid->data(), allowed);
 }
 
 Result<void> remove_command(std::wstring_view user)
@@ -1880,7 +2120,7 @@ Result<void> list_command(std::wstring_view user)
         return std::unexpected(engine.error());
     }
     const auto identity = policy_identity(sid->data());
-    std::wcout << L"wfp-lock loopback filters for " << *text << L":\n";
+    std::wcout << L"wfp-lock filters for " << *text << L":\n";
     std::size_t count {};
     auto enumerated = enumerate_filters(engine->value,
         [&](const FWPM_FILTER0& filter) -> Result<void>
@@ -1917,41 +2157,100 @@ Result<void> list_command(std::wstring_view user)
     return {};
 }
 
-Result<UserPort> parse_user_port(std::span<const std::wstring_view> arguments)
+// Parses a comma-separated endpoint list into a sorted set without repeats.
+Result<std::vector<detail::Endpoint>> parse_endpoint_list(std::wstring_view list)
 {
-    if (arguments.size() != 5 || arguments[1] != L"--user" || arguments[3] != L"--port" ||
-        arguments[2].empty())
+    std::vector<detail::Endpoint> endpoints;
+    for (;;)
     {
-        return std::unexpected(error(
-            ExitCode::usage, ERROR_INVALID_PARAMETER, L"Expected --user <account> --port <port>"));
+        const auto comma = list.find(L',');
+        const auto item = list.substr(0, comma);
+        auto endpoint = detail::parse_endpoint(item);
+        if (!endpoint)
+        {
+            return std::unexpected(error(ExitCode::usage,
+                ERROR_INVALID_DATA,
+                L"Invalid endpoint: '" + std::wstring(item) +
+                    L"'; expected <ipv4>:<port> or [<ipv6>]:<port>"));
+        }
+        endpoints.push_back(*endpoint);
+        if (endpoints.size() > max_allow_entries)
+        {
+            return std::unexpected(error(ExitCode::usage,
+                ERROR_INVALID_PARAMETER,
+                L"At most " + std::to_wstring(max_allow_entries) + L" endpoints are accepted"));
+        }
+        if (comma == std::wstring_view::npos)
+        {
+            break;
+        }
+        list.remove_prefix(comma + 1);
     }
-    auto port = parse_port(arguments[4]);
-    if (!port)
+    std::sort(endpoints.begin(), endpoints.end());
+    endpoints.erase(std::unique(endpoints.begin(), endpoints.end()), endpoints.end());
+    return endpoints;
+}
+
+// apply and verify: --user <account> [--allow <endpoints>]
+// allow and revoke: --user <account> <endpoints>
+Result<PolicyInput> parse_policy_input(
+    std::span<const std::wstring_view> arguments, bool endpoints_required)
+{
+    const bool has_allow =
+        !endpoints_required && arguments.size() == 5 && arguments[3] == L"--allow";
+    const bool has_list = endpoints_required && arguments.size() == 4;
+    const bool no_list = !endpoints_required && arguments.size() == 3;
+    if (!(has_allow || has_list || no_list) || arguments[1] != L"--user" || arguments[2].empty())
     {
-        return std::unexpected(port.error());
+        return std::unexpected(error(ExitCode::usage,
+            ERROR_INVALID_PARAMETER,
+            endpoints_required ? L"Expected --user <account> <endpoints>"
+                               : L"Expected --user <account> [--allow <endpoints>]"));
     }
-    return UserPort {std::wstring(arguments[2]), *port};
+    PolicyInput input {std::wstring(arguments[2]), {}};
+    if (no_list)
+    {
+        return input;
+    }
+    auto endpoints = parse_endpoint_list(arguments.back());
+    if (!endpoints)
+    {
+        return std::unexpected(endpoints.error());
+    }
+    input.allowed = std::move(*endpoints);
+    return input;
 }
 
 void print_usage()
 {
-    std::wcerr << L"wfp-lock.exe - Bind user traffic to loopback ports.\n"
+    std::wcerr << L"wfp-lock.exe - Restrict a user's outbound traffic to allowed TCP endpoints.\n"
                << L"Copyright (C) 2026 Florian Mücke\n"
                << L"This is free software - you are welcome to redistribute it under the terms\n"
                << L"of the GNU General Public License version 3; see LICENSE for details.\n"
                //<< L"This program comes with ABSOLUTELY NO WARRANTY.\n"
-               << L"\nThe policy permits the selected account's configured loopback\n"
-               << L"TCP port and blocks its other outbound TCP and UDP traffic.\n"
-               << L"\nUsage: wfp-lock.exe <command>\n"
+               << L"\nThe policy permits the selected account's TCP connections to the allowed\n"
+               << L"endpoints and blocks its other outbound TCP and UDP traffic.\n"
+               << L"\nUsage:\n"
+               << L"  wfp-lock.exe apply  --user <account> [--allow <endpoints>]\n"
+               << L"  wfp-lock.exe verify --user <account> [--allow <endpoints>]\n"
+               << L"  wfp-lock.exe allow  --user <account> <endpoints>\n"
+               << L"  wfp-lock.exe revoke --user <account> <endpoints>\n"
+               << L"  wfp-lock.exe remove --user <account>\n"
+               << L"  wfp-lock.exe list   --user <account>\n"
                << L"\nCommands:\n"
-               << L"  apply  --user <account> --port <port>  Install and verify the policy.\n"
-               << L"  verify --user <account> --port <port>  Check the installed policy.\n"
-               << L"  remove --user <account>                Remove this tool's policy.\n"
-               << L"  list   --user <account>                List this tool's filters.\n"
+               << L"  apply   Replace the policy with the given endpoints and verify it.\n"
+               << L"  verify  Check that the installed policy has exactly these endpoints.\n"
+               << L"  allow   Add endpoints to the installed policy and verify it.\n"
+               << L"  revoke  Remove endpoints from the installed policy and verify it.\n"
+               << L"  remove  Remove this tool's policy.\n"
+               << L"  list    List this tool's filters.\n"
                << L"\nOptions:\n"
-               << L"  --user <account>  Local Windows account to which the policy applies.\n"
-               << L"  --port <port>     Loopback TCP port, from 1 through 65535.\n"
-               << L"\napply and remove require an elevated Administrator session. "
+               << L"  --user <account>     Local Windows account to which the policy applies.\n"
+               << L"  --allow <endpoints>  Endpoints to permit. Without --allow, all outbound\n"
+               << L"                       TCP and UDP is blocked.\n"
+               << L"\n<endpoints> is a comma-separated list of <ipv4>:<port> or [<ipv6>]:<port>.\n"
+               << L"A policy holds at most 32 endpoints. IPv4 also permits its ::ffff: form.\n"
+               << L"\napply, allow, revoke, and remove require an elevated Administrator session."
                   L"\nA managed standard account may list or verify only its own policy.\n"
                << std::endl;
 }
@@ -1978,19 +2277,37 @@ int run(std::span<const std::wstring_view> arguments)
     }
     if (arguments[0] == L"apply" || arguments[0] == L"verify")
     {
-        auto input = parse_user_port(arguments);
+        auto input = parse_policy_input(arguments, false);
         if (!input)
         {
             print_usage();
+            std::wcerr << L"Error: " << input.error().message << L'\n';
             return static_cast<int>(input.error().exit_code);
         }
         if (arguments[0] == L"apply")
         {
-            return finish(apply_command(input->user, input->port),
-                L"wfp-lock loopback policy applied and verified.");
+            return finish(apply_command(input->user, input->allowed),
+                L"wfp-lock policy applied and verified.");
         }
-        return finish(verify_command(input->user, input->port),
-            L"wfp-lock loopback policy matches the requested user and port.");
+        return finish(verify_command(input->user, input->allowed),
+            L"wfp-lock policy matches the requested user and allow set.");
+    }
+    if (arguments[0] == L"allow" || arguments[0] == L"revoke")
+    {
+        auto input = parse_policy_input(arguments, true);
+        if (!input)
+        {
+            print_usage();
+            std::wcerr << L"Error: " << input.error().message << L'\n';
+            return static_cast<int>(input.error().exit_code);
+        }
+        if (arguments[0] == L"allow")
+        {
+            return finish(change_command(input->user, input->allowed, Change::allow),
+                L"wfp-lock endpoints allowed; policy verified.");
+        }
+        return finish(change_command(input->user, input->allowed, Change::revoke),
+            L"wfp-lock endpoints revoked; policy verified.");
     }
     if (arguments[0] == L"remove" || arguments[0] == L"list")
     {
@@ -2001,7 +2318,7 @@ int run(std::span<const std::wstring_view> arguments)
         }
         if (arguments[0] == L"remove")
         {
-            return finish(remove_command(arguments[2]), L"wfp-lock loopback policy removed.");
+            return finish(remove_command(arguments[2]), L"wfp-lock policy removed.");
         }
         return finish(list_command(arguments[2]), L"wfp-lock filters listed.");
     }

@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.10.0] - 2026-10-08
+
+- Changed (breaking): `apply` and `verify` take `--allow <endpoints>` instead of `--port <port>`.
+  The value is a comma-separated list of up to 32 endpoints, each `<ipv4>:<port>` or
+  `[<ipv6>]:<port>`. The previous `--port 8080` policy is `--allow 127.0.0.1:8080,[::1]:8080`.
+  Without `--allow`, all outbound TCP and UDP is blocked.
+- Added: `allow --user <account> <endpoints>` and `revoke --user <account> <endpoints>` add
+  endpoints to or remove them from an installed policy, then verify it. Both require an existing
+  policy; revoking an endpoint that is not installed changes nothing.
+- Added: Direct TCP endpoints outside loopback, for example a database server. An IPv4 endpoint
+  also permits its IPv4-mapped IPv6 form.
+- Changed: `verify` requires the installed filters to match the given allow set exactly,
+  regardless of order or repeated entries.
+- Changed: `apply` and `remove` replace filters written by 0.9 and earlier; `verify` rejects them
+  until the policy is reapplied.
+- Changed: Invalid arguments now print the reason after the usage text.
+- Documented: `wfp-lock` is configured independently of the `network-sandbox` proxy;
+  `agent-win-sandbox` orchestrates both.
+
 ## [0.9.0] - 2026-10-07
 
 - Changed: Changed name to `wfp-lock`.

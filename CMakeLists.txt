@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
 	wfp-lock 
-	VERSION 0.9.0
+	VERSION 0.10.0
 	LANGUAGES CXX RC
 )
 
@@ -30,7 +30,7 @@ endfunction()
 
 configure_app_version_resource(
     AppVersion.rc
-    "Bind user traffic to loopback ports"
+    "Restrict user traffic to allowed TCP endpoints"
     "wfp-lock"
     "wfp-lock.exe"
 )

@@ -31,6 +31,7 @@ constexpr std::wstring_view proxy_port = L"49155";
 constexpr std::wstring_view different_loopback_port = L"49156";
 constexpr std::wstring_view blocked_non_loopback_port = L"49157";
 constexpr std::wstring_view control_non_loopback_port = L"49158";
+constexpr std::wstring_view direct_non_loopback_port = L"49159";
 constexpr wchar_t traffic_password[] = L"WfpTraffic-Test-2026!";
 constexpr GUID provider_key {
     0x9b2365a6, 0xf9b9, 0x49f9, {0xab, 0xdb, 0x19, 0x65, 0x79, 0xb1, 0x48, 0x1c}
@@ -327,7 +328,7 @@ int launch_probe(std::wstring_view user, std::wstring_view password, std::wstrin
 }
 
 int launch_status_probe(std::wstring_view user, std::wstring_view password,
-    std::wstring_view command, std::wstring_view policy_user, std::wstring_view port = L"")
+    std::wstring_view command, std::wstring_view policy_user, std::wstring_view allowed = L"")
 {
     std::array<wchar_t, MAX_PATH> executable {};
     const DWORD executable_length =
@@ -339,9 +340,9 @@ int launch_status_probe(std::wstring_view user, std::wstring_view password,
     std::wstring line = L"\"" + std::wstring(executable.data(), executable_length) +
                         L"\" --status-probe " + std::wstring(command) + L" " +
                         std::wstring(policy_user);
-    if (!port.empty())
+    if (!allowed.empty())
     {
-        line += L" " + std::wstring(port);
+        line += L" " + std::wstring(allowed);
     }
     std::vector<wchar_t> mutable_line(line.begin(), line.end());
     mutable_line.push_back(L'\0');
@@ -437,11 +438,10 @@ int mutation_probe()
     return result == ERROR_ACCESS_DENIED ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-int run_user_port(std::wstring_view command, std::wstring_view user, std::wstring_view port)
+int run_policy(std::wstring_view command, std::wstring_view user, std::wstring_view allowed)
 {
-    const std::array arguments {
-        command, std::wstring_view(L"--user"), user, std::wstring_view(L"--port"), port
-    };
+    const std::array arguments {command, std::wstring_view(L"--user"), user,
+        std::wstring_view(L"--allow"), allowed};
     return wfp_lock::run(arguments);
 }
 
@@ -481,16 +481,33 @@ void traffic_enforcement_tests(std::wstring_view target, std::wstring_view other
         "remove any prior control-account policy");
     check(set_test_password(target), "set disposable target-account password");
     check(set_test_password(other), "set disposable control-account password");
-    check(run_user_port(L"apply", target, proxy_port) ==
-              static_cast<int>(wfp_lock::ExitCode::success),
-        "apply target loopback policy");
-    check(launch_status_probe(target, traffic_password, L"verify", target, proxy_port) ==
+    const auto non_loopback = non_loopback_address();
+    check(non_loopback.has_value(), "find a non-loopback IPv4 address");
+    wchar_t non_loopback_text[INET_ADDRSTRLEN] {};
+    check(non_loopback &&
+              InetNtopW(AF_INET, &non_loopback->sin_addr, non_loopback_text, INET_ADDRSTRLEN) !=
+                  nullptr,
+        "format non-loopback IPv4 address");
+    if (failures != 0)
+    {
+        return;
+    }
+    const std::wstring_view non_loopback_view(non_loopback_text);
+
+    // The loopback proxy endpoints plus one direct endpoint on the host's
+    // non-loopback address. Other ports on that address remain blocked.
+    const std::wstring allowed = L"127.0.0.1:" + std::wstring(proxy_port) + L",[::1]:" +
+                                 std::wstring(proxy_port) + L"," + std::wstring(non_loopback_view) +
+                                 L":" + std::wstring(direct_non_loopback_port);
+    check(run_policy(L"apply", target, allowed) == static_cast<int>(wfp_lock::ExitCode::success),
+        "apply target policy");
+    check(launch_status_probe(target, traffic_password, L"verify", target, allowed) ==
               static_cast<int>(wfp_lock::ExitCode::success),
         "managed standard account verifies its own policy");
     check(launch_status_probe(target, traffic_password, L"list", target) ==
               static_cast<int>(wfp_lock::ExitCode::success),
         "managed standard account lists its own filters");
-    check(launch_status_probe(other, traffic_password, L"verify", target, proxy_port) ==
+    check(launch_status_probe(other, traffic_password, L"verify", target, allowed) ==
               static_cast<int>(wfp_lock::ExitCode::precondition),
         "another standard account cannot inspect the target policy");
     check(launch_mutation_probe(target, traffic_password) == EXIT_SUCCESS,
@@ -506,9 +523,7 @@ void traffic_enforcement_tests(std::wstring_view target, std::wstring_view other
     sockaddr_in6 loopback_v6 {};
     check(parse_address(L"127.0.0.1", 49155, loopback_v4), "parse IPv4 loopback address");
     check(parse_address(L"::1", 49155, loopback_v6), "parse IPv6 loopback address");
-    const auto non_loopback = non_loopback_address();
-    check(non_loopback.has_value(), "find a non-loopback IPv4 address");
-    if (failures != 0 || !non_loopback)
+    if (failures != 0)
     {
         return;
     }
@@ -517,6 +532,13 @@ void traffic_enforcement_tests(std::wstring_view target, std::wstring_view other
     blocked_address.sin_port = htons(49157);
     sockaddr_in control_address = *non_loopback;
     control_address.sin_port = htons(49158);
+    sockaddr_in direct_address = *non_loopback;
+    direct_address.sin_port = htons(49159);
+    Receiver direct_receiver;
+    check(start_tcp_receiver(direct_receiver,
+              reinterpret_cast<const sockaddr*>(&direct_address),
+              sizeof(direct_address)),
+        "start direct-endpoint TCP listener");
     Receiver loopback_v4_receiver;
     Receiver loopback_v6_receiver;
     Receiver different_loopback_tcp_receiver;
@@ -570,27 +592,22 @@ void traffic_enforcement_tests(std::wstring_view target, std::wstring_view other
     const auto failed =
         [&](std::wstring_view protocol, std::wstring_view address, std::wstring_view port)
     { return launch_probe(target, traffic_password, protocol, address, port) != EXIT_SUCCESS; };
-    wchar_t non_loopback_text[INET_ADDRSTRLEN] {};
-    check(
-        InetNtopW(AF_INET, &non_loopback->sin_addr, non_loopback_text, INET_ADDRSTRLEN) != nullptr,
-        "format non-loopback IPv4 address");
-    if (failures != 0)
-    {
-        return;
-    }
-    const std::wstring_view non_loopback_view(non_loopback_text);
 
     check(launch_probe(target, traffic_password, L"tcp", L"127.0.0.1", proxy_port) == EXIT_SUCCESS,
         "target process reaches configured IPv4 loopback proxy port");
     check(launch_probe(target, traffic_password, L"tcp", L"::1", proxy_port) == EXIT_SUCCESS,
         "target process reaches configured IPv6 loopback proxy port");
+    check(launch_probe(
+              target, traffic_password, L"tcp", non_loopback_view, direct_non_loopback_port) ==
+              EXIT_SUCCESS,
+        "target process reaches the allowed direct endpoint");
     check(failed(L"tcp", L"127.0.0.1", different_loopback_port),
         "target process is blocked from a different loopback TCP port");
     // UDP send can report local queueing success even when ALE later drops the
     // datagram. The receiver is the end-to-end enforcement assertion below.
     launch_probe(target, traffic_password, L"udp", L"127.0.0.1", different_loopback_port);
     check(failed(L"tcp", non_loopback_view, blocked_non_loopback_port),
-        "target process is blocked from non-loopback TCP");
+        "target process is blocked from another port on the direct endpoint's address");
     launch_probe(target, traffic_password, L"udp", non_loopback_view, blocked_non_loopback_port);
     check(launch_probe(
               other, traffic_password, L"tcp", non_loopback_view, control_non_loopback_port) ==
@@ -605,6 +622,7 @@ void traffic_enforcement_tests(std::wstring_view target, std::wstring_view other
         receiver_received(loopback_v4_receiver), "IPv4 loopback listener received target traffic");
     check(
         receiver_received(loopback_v6_receiver), "IPv6 loopback listener received target traffic");
+    check(receiver_received(direct_receiver), "direct-endpoint listener received target traffic");
     check(!receiver_received(different_loopback_tcp_receiver),
         "different-loopback TCP listener received no target traffic");
     check(!receiver_received(different_loopback_udp_receiver),
@@ -630,13 +648,11 @@ int wmain(int argc, wchar_t** argv)
     {
         if (std::wstring_view(argv[2]) == L"verify" && argc == 5)
         {
-            const std::array arguments {
-                std::wstring_view(L"verify"),
+            const std::array arguments {std::wstring_view(L"verify"),
                 std::wstring_view(L"--user"),
                 std::wstring_view(argv[3]),
-                std::wstring_view(L"--port"),
-                std::wstring_view(argv[4])
-            };
+                std::wstring_view(L"--allow"),
+                std::wstring_view(argv[4])};
             return wfp_lock::run(arguments);
         }
         if (std::wstring_view(argv[2]) == L"list" && argc == 4)

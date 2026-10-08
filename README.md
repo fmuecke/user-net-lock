@@ -2,41 +2,65 @@
 
 # wfp-lock [![Windows build](https://github.com/fmuecke/wfp-lock/actions/workflows/build.yml/badge.svg)](https://github.com/fmuecke/wfp-lock/actions/workflows/build.yml)
 
-`wfp-lock.exe` is the small, elevated enforcement primitive for Agent Sandbox.
-For one Windows account and one loopback proxy port, it creates, verifies, or
-removes a persistent WFP policy:
+`wfp-lock.exe` is a small, elevated tool that restricts one Windows account's
+outbound network traffic. For that account it creates, verifies, or removes a
+persistent WFP policy that:
 
-- permits TCP only to `127.0.0.1:<port>`, `[::1]:<port>`, and the IPv4-mapped
-  IPv6 form of the same loopback endpoint;
+- permits TCP only to the endpoints given with `--allow`. An IPv4 endpoint also
+  covers its IPv4-mapped IPv6 form;
 - blocks all other outbound TCP and UDP attributed to that account;
 - leaves ICMP and ICMPv6 unmanaged.
 
-It does not read configuration files, install a proxy, download software,
-resolve hostnames, or interpret an allowlist. It protects its WFP provider,
-sublayer, and filters from modification by every managed account while granting
-each managed account read-only access to its own policy status. The proxy
-configurator owns the remaining concerns;
-`agent-win-sandbox` calls this tool only after the loopback proxy is running
-and healthy.
+It does not read configuration files, install a proxy, download software, or
+resolve hostnames. It protects its WFP provider, sublayer, and filters from
+modification by every managed account, and gives each managed account read-only
+access to its own policy status.
+
+`wfp-lock` is configured independently of other tools. In Agent Sandbox,
+`agent-win-sandbox` orchestrates it together with the `network-sandbox` proxy:
+it starts the proxy and then applies a policy whose allow set includes the
+proxy's loopback endpoints.
 
 ## Commands
 
-`apply` and `remove` require an elevated Administrator session. A managed,
-non-administrator account may run `verify` and `list` only for itself. An
-administrator may inspect any managed account.
+`apply`, `allow`, `revoke`, and `remove` require an elevated Administrator
+session. A managed, non-administrator account may run `verify` and `list` only
+for itself. An administrator may inspect any managed account.
 
 ```text
-wfp-lock apply --user <account> --port <port>
-wfp-lock verify --user <account> --port <port>
+wfp-lock apply  --user <account> [--allow <endpoints>]
+wfp-lock verify --user <account> [--allow <endpoints>]
+wfp-lock allow  --user <account> <endpoints>
+wfp-lock revoke --user <account> <endpoints>
 wfp-lock remove --user <account>
-wfp-lock list --user <account>
+wfp-lock list   --user <account>
 ```
 
-`apply` replaces only this tool's existing filters for the selected account,
-installs the fixed loopback policy, and verifies it before reporting success.
+`<endpoints>` is a comma-separated list without spaces, for example
+`127.0.0.1:8080,[::1]:8080,10.1.2.3:5432`. Each endpoint is `<ipv4>:<port>` or
+`[<ipv6>]:<port>`. A policy holds up to 32 endpoints; order and repeated
+entries do not matter. Hostnames, zone IDs, IPv4-mapped IPv6, unspecified,
+multicast, and broadcast addresses are rejected.
+
+`apply` replaces only this tool's existing filters for the selected account
+with the given allow set, and verifies the result before reporting success.
+Without `--allow`, all of the account's outbound TCP and UDP is blocked.
+`verify` succeeds only if the installed filters exactly match the given allow
+set.
+
+`allow` adds endpoints to the installed policy and `revoke` removes them; both
+verify the result. They require an existing policy, so `allow` cannot create
+a policy that lacks the endpoints set by `apply`. Revoking an endpoint that is
+not installed changes nothing.
+
 `remove` deletes only this tool's filters for the selected account. `list`
-prints those filters, including any stale loopback policy from a different
-port.
+prints those filters, including any left from a different allow set.
+
+A direct endpoint bypasses any proxy, and it is tied to its IP address: if the
+service moves, reapply the policy. If the address is shared, for example by a
+load balancer, the entry reaches every service there on that port. Windows
+Firewall and other WFP providers can still block traffic that this policy
+permits.
 
 The status ACL grants the managed account WFP read access and `READ_CONTROL`
 only. It grants no filter deletion, policy mutation, ownership, or DACL-change
@@ -101,18 +125,25 @@ and stops the guest:
 .\tests\Invoke-WfpIntegrationInWindowsSandbox.ps1
 ```
 
-The test applies and verifies the policy, confirms exactly seven filters, then
-removes it and confirms its filters, provider, and sublayer are gone. It also
-weakens the provider, sublayer, and filter DACLs, requires `verify` to fail for
-each case, and reapplies to prove DACL repair. Finally, it proves repeated
-apply replaces a user's prior port policy and that removing one user's policy
-leaves the other's intact. The WFP changes and test accounts exist only in the
-Windows Sandbox guest; no host wfp-lock policy is modified.
+The test applies and verifies a loopback policy, confirms exactly seven
+filters, then removes it and confirms its filters, provider, and sublayer are
+gone. It also weakens the provider, sublayer, and filter DACLs, requires
+`verify` to fail for each case, and reapplies to prove DACL repair. It proves
+repeated apply replaces a user's prior policy and that removing one user's
+policy leaves the other's intact. It checks filter counts for direct IPv4 and
+IPv6 endpoints and for a block-only policy, that `verify` ignores order and
+repeated entries but rejects a missing or extra endpoint, and that `apply`,
+`allow`, and `remove` replace filters written by wfp-lock 0.9. It checks that
+`allow` and `revoke` change only the given endpoints, that `allow` needs an
+existing policy and stops at 32 endpoints, and that revoking a missing endpoint
+changes nothing. The WFP changes and test accounts exist only in the Windows
+Sandbox guest; no host wfp-lock policy is modified.
 
 The same runner also launches a real traffic-enforcement test as the two
-disposable accounts. It proves the target account can use the configured IPv4
-and IPv6 loopback TCP proxy port, cannot use a different loopback port or TCP
-and UDP to a non-loopback address, and that the second account can still reach
+disposable accounts. It proves the target account can use the allowed IPv4 and
+IPv6 loopback TCP port and an allowed direct endpoint on a non-loopback
+address. It cannot use a different loopback port, another port on the direct
+endpoint's address, or UDP to either, while the second account can still reach
 the non-loopback TCP and UDP listeners. It also verifies that the target can
 list and verify its own installed policy without elevation, while the other
 standard account cannot inspect it. It also attempts to weaken the provider

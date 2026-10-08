@@ -5,6 +5,7 @@
 #include "wfp_lock.h"
 
 #include <array>
+#include <initializer_list>
 #include <cstdint>
 #include <cstdlib>
 #include <fwpmtypes.h>
@@ -13,6 +14,7 @@
 #include <memory>
 #include <sddl.h>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -131,12 +133,35 @@ bool open_engine(Engine& engine)
     return code == ERROR_SUCCESS;
 }
 
+int run_policy(std::wstring_view command, std::wstring_view user,
+    std::initializer_list<std::wstring_view> allowed)
+{
+    std::wstring list;
+    for (const auto endpoint : allowed)
+    {
+        list += (list.empty() ? L"" : L",") + std::wstring(endpoint);
+    }
+    std::vector<std::wstring_view> arguments {command, L"--user", user};
+    if (!list.empty())
+    {
+        arguments.push_back(L"--allow");
+        arguments.push_back(list);
+    }
+    return wfp_lock::run(arguments);
+}
+
+int run_change(std::wstring_view command, std::wstring_view user, std::wstring_view endpoints)
+{
+    const std::array arguments {command, std::wstring_view(L"--user"), user, endpoints};
+    return wfp_lock::run(arguments);
+}
+
+// The loopback proxy endpoint pair used by most tests: seven filters.
 int run_user_port(std::wstring_view command, std::wstring_view user, std::wstring_view port)
 {
-    const std::array arguments {
-        command, std::wstring_view(L"--user"), user, std::wstring_view(L"--port"), port
-    };
-    return wfp_lock::run(arguments);
+    const std::wstring v4 = L"127.0.0.1:" + std::wstring(port);
+    const std::wstring v6 = L"[::1]:" + std::wstring(port);
+    return run_policy(command, user, {v4, v6});
 }
 
 int run_remove(std::wstring_view user)
@@ -457,6 +482,155 @@ void concurrent_apply_tests(std::wstring_view first_user, std::wstring_view seco
         "second account retains shared-infrastructure status access after concurrent apply");
 }
 
+
+int quiet_run_policy(std::wstring_view command, std::wstring_view user,
+    std::initializer_list<std::wstring_view> allowed)
+{
+    ScopedWcerrCapture errors;
+    return run_policy(command, user, allowed);
+}
+
+void allow_set_tests(HANDLE engine, std::wstring_view user)
+{
+    constexpr std::wstring_view proxy_v4 = L"127.0.0.1:49152";
+    constexpr std::wstring_view proxy_v6 = L"[::1]:49152";
+    constexpr std::wstring_view direct_v4 = L"192.0.2.10:5432";
+    constexpr std::wstring_view direct_v6 = L"[2001:db8::10]:5432";
+    constexpr int success = static_cast<int>(wfp_lock::ExitCode::success);
+    constexpr int verification = static_cast<int>(wfp_lock::ExitCode::verification);
+
+    check(run_policy(L"apply", user, {proxy_v4, proxy_v6, direct_v4, direct_v6}) == success,
+        "apply installs loopback and direct endpoints");
+    check(filter_keys(engine).size() == 10,
+        "two IPv4 and two IPv6 endpoints create ten filters");
+    check(run_policy(L"verify", user, {direct_v6, proxy_v6, direct_v4, proxy_v4, direct_v4}) ==
+              success,
+        "verify ignores allow-set order and repeated entries");
+    check(quiet_run_policy(L"verify", user, {proxy_v4, proxy_v6, direct_v4}) == verification,
+        "verify rejects an allow set missing an installed endpoint");
+    check(quiet_run_policy(L"verify", user, {proxy_v4, proxy_v6, direct_v4, direct_v6,
+              L"192.0.2.11:5432"}) == verification,
+        "verify rejects an allow set with an endpoint that is not installed");
+
+    check(run_policy(L"apply", user, {}) == success, "apply without --allow blocks everything");
+    check(filter_keys(engine).size() == 4, "a block-only policy has four filters");
+    check(run_policy(L"verify", user, {}) == success, "verify accepts the block-only policy");
+    check(quiet_run_policy(L"verify", user, {proxy_v4}) == verification,
+        "verify rejects an endpoint missing from the block-only policy");
+    check(run_remove(user) == success, "remove deletes the allow-set test policy");
+}
+
+// wfp-lock 0.9 and earlier appended the loopback port to the policy identity in
+// providerData. apply and remove must still recognize and replace such filters.
+void legacy_filter_tests(HANDLE engine, std::wstring_view user)
+{
+    constexpr std::array<UINT8, 16> policy_tag {
+        'w', 'f', 'p', '-', 'l', 'o', 'o', 'p', 'b', 'a', 'c', 'k', '-', 'v', '1', 0
+    };
+    check(reapply_and_verify(user, first_port), "apply creates the shared infrastructure");
+    const auto sid = account_sid(user);
+    std::vector<UINT8> legacy_data(policy_tag.begin(), policy_tag.end());
+    legacy_data.insert(legacy_data.end(), sid.begin(), sid.end());
+    legacy_data.push_back(0x50);
+    legacy_data.push_back(0xc0);
+
+    FWPM_FILTER_CONDITION0 condition {};
+    condition.fieldKey = FWPM_CONDITION_IP_REMOTE_PORT;
+    condition.matchType = FWP_MATCH_EQUAL;
+    condition.conditionValue.type = FWP_UINT16;
+    condition.conditionValue.uint16 = 1;
+    FWPM_FILTER0 filter {};
+    filter.displayData.name = const_cast<wchar_t*>(L"wfp-lock legacy test filter");
+    filter.flags = FWPM_FILTER_FLAG_PERSISTENT;
+    filter.providerKey = const_cast<GUID*>(&provider_key);
+    filter.providerData = {static_cast<UINT32>(legacy_data.size()), legacy_data.data()};
+    filter.layerKey = FWPM_LAYER_ALE_AUTH_CONNECT_V4;
+    filter.subLayerKey = sublayer_key;
+    filter.weight.type = FWP_EMPTY;
+    filter.numFilterConditions = 1;
+    filter.filterCondition = &condition;
+    filter.action.type = FWP_ACTION_BLOCK;
+    check(FwpmFilterAdd0(engine, &filter, nullptr, nullptr) == ERROR_SUCCESS,
+        "add a legacy-format filter");
+    check(filter_keys(engine).size() == 8, "the legacy filter sits beside the current policy");
+    check(quiet_run_policy(L"verify",
+              user,
+              {L"127.0.0.1:" + std::wstring(first_port), L"[::1]:" + std::wstring(first_port)}) ==
+              static_cast<int>(wfp_lock::ExitCode::verification),
+        "verify rejects a policy that still contains a legacy filter");
+    check(reapply_and_verify(user, first_port), "apply replaces the legacy filter");
+    check(filter_keys(engine).size() == 7, "apply leaves only the current policy");
+
+    check(FwpmFilterAdd0(engine, &filter, nullptr, nullptr) == ERROR_SUCCESS,
+        "add a legacy-format filter before allow");
+    check(run_change(L"allow", user, L"192.0.2.10:5432") ==
+              static_cast<int>(wfp_lock::ExitCode::success),
+        "allow keeps the endpoints of a policy that contains a legacy filter");
+    check(filter_keys(engine).size() == 9, "allow replaces the legacy filter");
+
+    check(FwpmFilterAdd0(engine, &filter, nullptr, nullptr) == ERROR_SUCCESS,
+        "add a legacy-format filter before remove");
+    check(run_remove(user) == static_cast<int>(wfp_lock::ExitCode::success),
+        "remove accepts a legacy filter");
+    check(filter_keys(engine).empty(), "remove deletes the legacy filter");
+}
+
+void change_tests(HANDLE engine, std::wstring_view user)
+{
+    constexpr std::wstring_view proxy_v4 = L"127.0.0.1:49152";
+    constexpr std::wstring_view proxy_v6 = L"[::1]:49152";
+    constexpr std::wstring_view direct_v4 = L"192.0.2.10:5432";
+    constexpr std::wstring_view direct_v6 = L"[2001:db8::10]:5432";
+    constexpr int success = static_cast<int>(wfp_lock::ExitCode::success);
+
+    {
+        ScopedWcerrCapture errors;
+        check(run_change(L"allow", user, direct_v4) ==
+                  static_cast<int>(wfp_lock::ExitCode::precondition),
+            "allow requires an installed policy");
+    }
+    check(filter_keys(engine).empty(), "a rejected allow installs nothing");
+
+    check(run_policy(L"apply", user, {proxy_v4, proxy_v6}) == success,
+        "apply installs the loopback policy");
+    check(run_change(L"allow", user, direct_v4) == success, "allow adds an IPv4 endpoint");
+    check(filter_keys(engine).size() == 9, "an added IPv4 endpoint adds two filters");
+    check(run_policy(L"verify", user, {proxy_v4, proxy_v6, direct_v4}) == success,
+        "the policy contains the original and the added endpoint");
+    check(run_change(L"allow", user, std::wstring(direct_v4) + L"," + std::wstring(direct_v6)) ==
+              success,
+        "allow accepts a list that repeats an installed endpoint");
+    check(filter_keys(engine).size() == 10, "an added IPv6 endpoint adds one filter");
+
+    check(run_change(L"revoke", user, direct_v4) == success, "revoke removes an endpoint");
+    check(filter_keys(engine).size() == 8, "revoking an IPv4 endpoint removes two filters");
+    check(run_policy(L"verify", user, {proxy_v4, proxy_v6, direct_v6}) == success,
+        "the other endpoints remain after revoke");
+    check(run_change(L"revoke", user, L"192.0.2.99:1") == success,
+        "revoking an endpoint that is not installed succeeds");
+    check(filter_keys(engine).size() == 8, "revoking a missing endpoint changes nothing");
+    check(run_change(L"revoke",
+              user,
+              std::wstring(proxy_v4) + L"," + std::wstring(proxy_v6) + L"," +
+                  std::wstring(direct_v6)) == success,
+        "revoke removes all endpoints");
+    check(run_policy(L"verify", user, {}) == success, "revoking all endpoints leaves only blocks");
+
+    std::wstring full;
+    for (int port = 1; port <= 32; ++port)
+    {
+        full += (port == 1 ? L"" : L",") + std::wstring(L"127.0.0.1:") + std::to_wstring(port);
+    }
+    check(run_change(L"allow", user, full) == success, "allow fills the policy to 32 endpoints");
+    {
+        ScopedWcerrCapture errors;
+        check(run_change(L"allow", user, direct_v4) == static_cast<int>(wfp_lock::ExitCode::usage),
+            "allow rejects a 33rd endpoint");
+    }
+    check(filter_keys(engine).size() == 4 + 2 * 32, "a rejected allow leaves the policy unchanged");
+    check(run_remove(user) == success, "remove deletes the change-test policy");
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv)
@@ -529,8 +703,13 @@ int wmain(int argc, wchar_t** argv)
         "remove first-account DACL test policy");
     idempotence_and_isolation_tests(first_user, second_user);
     concurrent_apply_tests(first_user, second_user);
+    check(run_remove(first_user) == static_cast<int>(wfp_lock::ExitCode::success),
+        "remove first-account concurrent-apply policy");
     check(run_remove(second_user) == static_cast<int>(wfp_lock::ExitCode::success),
         "remove second-account policy");
+    allow_set_tests(engine.value, first_user);
+    legacy_filter_tests(engine.value, first_user);
+    change_tests(engine.value, first_user);
     if (failures != 0)
     {
         return EXIT_FAILURE;
