@@ -4,6 +4,7 @@
 
 #include "wfp_lock.h"
 
+#include <algorithm>
 #include <array>
 #include <initializer_list>
 #include <cstdint>
@@ -575,6 +576,70 @@ void legacy_filter_tests(HANDLE engine, std::wstring_view user)
     check(filter_keys(engine).empty(), "remove deletes the legacy filter");
 }
 
+// Rebuilds a permit through the WFP API with a remote-port comparison that
+// cannot be represented by an endpoint. Incremental commands must leave it intact.
+void malformed_permit_tests(HANDLE engine, std::wstring_view user)
+{
+    constexpr int success = static_cast<int>(wfp_lock::ExitCode::success);
+    constexpr int verification = static_cast<int>(wfp_lock::ExitCode::verification);
+    for (const auto command : {L"allow", L"revoke"})
+    {
+        check(run_policy(L"apply", user, {L"192.0.2.10:5432"}) == success,
+            "install the policy before modifying a permit");
+        bool modified {};
+        for (const GUID& key : filter_keys(engine))
+        {
+            FWPM_FILTER0* filter {};
+            if (FwpmFilterGetByKey0(engine, &key, &filter) != ERROR_SUCCESS)
+            {
+                check(false, "read the permit to modify");
+                continue;
+            }
+            if (filter->action.type == FWP_ACTION_PERMIT &&
+                IsEqualGUID(filter->layerKey, FWPM_LAYER_ALE_AUTH_CONNECT_V4))
+            {
+                for (UINT32 index = 0; index < filter->numFilterConditions; ++index)
+                {
+                    auto& condition = filter->filterCondition[index];
+                    if (IsEqualGUID(condition.fieldKey, FWPM_CONDITION_IP_REMOTE_PORT))
+                    {
+                        condition.matchType = FWP_MATCH_GREATER;
+                    }
+                }
+                const bool deleted = FwpmFilterDeleteByKey0(engine, &key) == ERROR_SUCCESS;
+                modified = deleted && FwpmFilterAdd0(engine, filter, nullptr, nullptr) == ERROR_SUCCESS;
+                check(modified, "install a permit for ports greater than 5432");
+            }
+            FwpmFreeMemory0(reinterpret_cast<void**>(&filter));
+            if (modified)
+            {
+                break;
+            }
+        }
+        if (!modified)
+        {
+            check(false, "find the IPv4 permit to modify");
+            continue;
+        }
+        const auto original_keys = filter_keys(engine);
+        {
+            ScopedWcerrCapture errors;
+            check(run_change(command, user, L"192.0.2.99:1") == verification,
+                "incremental changes reject a non-equality permit");
+        }
+        const auto remaining_keys = filter_keys(engine);
+        check(remaining_keys.size() == original_keys.size() &&
+                  std::all_of(original_keys.begin(), original_keys.end(),
+                      [&](const GUID& key)
+                      {
+                          return std::any_of(remaining_keys.begin(), remaining_keys.end(),
+                              [&](const GUID& remaining) { return IsEqualGUID(key, remaining); });
+                      }),
+            "a rejected incremental change preserves the installed filters");
+    }
+    check(run_remove(user) == success, "remove the modified permit test policy");
+}
+
 void change_tests(HANDLE engine, std::wstring_view user)
 {
     constexpr std::wstring_view proxy_v4 = L"127.0.0.1:49152";
@@ -621,13 +686,21 @@ void change_tests(HANDLE engine, std::wstring_view user)
     {
         full += (port == 1 ? L"" : L",") + std::wstring(L"127.0.0.1:") + std::to_wstring(port);
     }
-    check(run_change(L"allow", user, full) == success, "allow fills the policy to 32 endpoints");
+    full += L",127.0.0.1:00001";
+    check(run_change(L"allow", user, full) == success,
+        "allow fills the policy to 32 unique endpoints despite a duplicate");
+    check(run_policy(L"verify", user, {full}) == success,
+        "verify accepts 32 unique endpoints plus a duplicate");
     {
         ScopedWcerrCapture errors;
         check(run_change(L"allow", user, direct_v4) == static_cast<int>(wfp_lock::ExitCode::usage),
             "allow rejects a 33rd endpoint");
     }
     check(filter_keys(engine).size() == 4 + 2 * 32, "a rejected allow leaves the policy unchanged");
+    check(run_change(L"revoke", user, full) == success,
+        "revoke accepts 32 unique endpoints plus a duplicate");
+    check(run_policy(L"verify", user, {}) == success,
+        "revoking the full allow set leaves only blocks");
     check(run_remove(user) == success, "remove deletes the change-test policy");
 }
 
@@ -709,6 +782,7 @@ int wmain(int argc, wchar_t** argv)
         "remove second-account policy");
     allow_set_tests(engine.value, first_user);
     legacy_filter_tests(engine.value, first_user);
+    malformed_permit_tests(engine.value, first_user);
     change_tests(engine.value, first_user);
     if (failures != 0)
     {

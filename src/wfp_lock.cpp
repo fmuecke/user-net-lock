@@ -1933,6 +1933,11 @@ Result<void> verify_command(std::wstring_view user, std::span<const detail::Endp
 Result<std::optional<std::vector<detail::Endpoint>>> installed_allow_set(HANDLE engine, PSID sid)
 {
     const auto identity = policy_identity(sid);
+    auto user_sd = user_condition_descriptor(sid);
+    if (!user_sd)
+    {
+        return std::unexpected(user_sd.error());
+    }
     bool found {};
     std::vector<detail::Endpoint> endpoints;
     auto enumerated = enumerate_filters(engine,
@@ -1963,6 +1968,7 @@ Result<std::optional<std::vector<detail::Endpoint>>> installed_allow_set(HANDLE 
                 return malformed();
             }
             detail::Endpoint endpoint;
+            bool mapped {};
             endpoint.port = port->conditionValue.uint16;
             if (IsEqualGUID(filter.layerKey, FWPM_LAYER_ALE_AUTH_CONNECT_V4) &&
                 address->conditionValue.type == FWP_UINT32)
@@ -1978,17 +1984,28 @@ Result<std::optional<std::vector<detail::Endpoint>>> installed_allow_set(HANDLE 
                 constexpr std::array<UINT8, 12> mapped_prefix {
                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff
                 };
-                if (std::equal(mapped_prefix.begin(), mapped_prefix.end(), bytes.begin()))
-                {
-                    return {};
-                }
+                mapped = std::equal(mapped_prefix.begin(), mapped_prefix.end(), bytes.begin());
                 endpoint.address_v6 = bytes;
             }
             else
             {
                 return malformed();
             }
-            endpoints.push_back(endpoint);
+            // Validate the original permit before treating its values as an endpoint.
+            // Keep accepting the legacy identity suffix during migration.
+            const std::vector<UINT8> data(filter.providerData.data,
+                filter.providerData.data + filter.providerData.size);
+            const Rule expected {&filter.layerKey, FWP_ACTION_PERMIT, permit_weight,
+                static_cast<std::uint8_t>(IPPROTO_TCP), endpoint.address_v4,
+                endpoint.address_v6, endpoint.port};
+            if (!matches_rule(filter, expected, data, *user_sd))
+            {
+                return malformed();
+            }
+            if (!mapped)
+            {
+                endpoints.push_back(endpoint);
+            }
             return {};
         });
     if (!enumerated)
@@ -2173,7 +2190,10 @@ Result<std::vector<detail::Endpoint>> parse_endpoint_list(std::wstring_view list
                 L"Invalid endpoint: '" + std::wstring(item) +
                     L"'; expected <ipv4>:<port> or [<ipv6>]:<port>"));
         }
-        endpoints.push_back(*endpoint);
+        if (std::find(endpoints.begin(), endpoints.end(), *endpoint) == endpoints.end())
+        {
+            endpoints.push_back(*endpoint);
+        }
         if (endpoints.size() > max_allow_entries)
         {
             return std::unexpected(error(ExitCode::usage,
@@ -2187,7 +2207,6 @@ Result<std::vector<detail::Endpoint>> parse_endpoint_list(std::wstring_view list
         list.remove_prefix(comma + 1);
     }
     std::sort(endpoints.begin(), endpoints.end());
-    endpoints.erase(std::unique(endpoints.begin(), endpoints.end()), endpoints.end());
     return endpoints;
 }
 

@@ -135,6 +135,21 @@ void cli_tests()
         "clear is no longer an alias for remove");
 }
 
+// A deliberately invalid local-account name keeps these CLI checks out of WFP.
+void endpoint_limit_tests()
+{
+    std::wstring list;
+    for (int port = 1; port <= 32; ++port)
+    {
+        list += (port == 1 ? L"" : L",") + std::wstring(L"127.0.0.1:") + std::to_wstring(port);
+    }
+    list += L",127.0.0.1:00001";
+    const std::wstring_view arguments[] = {L"verify", L"--user",
+        L".\\wfp-lock-endpoint-limit-invalid-account", L"--allow", list};
+    check(wfp_lock::run(arguments) == static_cast<int>(wfp_lock::ExitCode::precondition),
+        "32 unique endpoints plus a duplicate pass parsing and reach account validation");
+}
+
 void endpoint_parsing_tests()
 {
     using wfp_lock::detail::parse_endpoint;
@@ -246,6 +261,7 @@ int main()
 {
     cli_tests();
     endpoint_parsing_tests();
+    endpoint_limit_tests();
     wfp_object_access_control_tests();
     if (failures != 0)
     {
